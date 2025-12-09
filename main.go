@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,9 +65,10 @@ func main() {
 	http.HandleFunc("/login", handleLoginSubmit)
 	http.HandleFunc("/logout", handleLogout)
 	http.HandleFunc("/ad", requireAuth(handleAdmin))
-	http.HandleFunc("/upload", requireAuth(handleUpload))
-	http.HandleFunc("/files", handleListFiles)
+	http.HandleFunc("/files", obfuscateHandler(handleListFiles))
+    http.HandleFunc("/upload", obfuscateHandler(requireAuth(handleUpload)))
 	http.HandleFunc("/view/", handleView)
+	http.HandleFunc("/stream/", handleStream)
 	http.HandleFunc("/edit/", requireAuth(handleEdit))
 	http.HandleFunc("/save/", requireAuth(handleSave))
 	http.HandleFunc("/raw/", handleRaw)
@@ -76,6 +78,10 @@ func main() {
 	http.HandleFunc("/duplicate/", requireAuth(handleDuplicate))
 	http.HandleFunc("/zip-multiple", requireAuth(handleZipMultiple))
 	http.HandleFunc("/zip-view/", handleZipView)
+	http.HandleFunc("/benchmark/ping", handleBenchmarkPing)
+    http.HandleFunc("/benchmark/download", handleBenchmarkDownload)
+    http.HandleFunc("/benchmark/upload", handleBenchmarkUpload)
+    http.HandleFunc("/benchmark/disk", requireAuth(handleBenchmarkDisk))
 	http.HandleFunc("/", handleIndex)
 
 	addr := config.IP + ":" + config.Port
@@ -164,7 +170,172 @@ func getFileType(filename string) string {
 
 	return "binary"
 }
+func handleStream(w http.ResponseWriter, r *http.Request) {
+	filename := r.URL.Path[len("/stream/"):]
+	filePath := filepath.Join(publicDir, filename)
+	
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	
+	stat, err := file.Stat()
+	if err != nil {
+		http.Error(w, "Error getting file info", http.StatusInternalServerError)
+		return
+	}
+	
+	size := stat.Size()
+	
+	// Set content type based on extension
+	ext := strings.ToLower(filepath.Ext(filename))
+	contentType := "video/mp4"
+	switch ext {
+	case ".webm":
+		contentType = "video/webm"
+	case ".ogg":
+		contentType = "video/ogg"
+	case ".mov":
+		contentType = "video/quicktime"
+	case ".avi":
+		contentType = "video/x-msvideo"
+	case ".mkv":
+		contentType = "video/x-matroska"
+	}
+	
+	// Handle range requests for seeking
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader == "" {
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
+		w.Header().Set("Accept-Ranges", "bytes")
+		io.Copy(w, file)
+		return
+	}
+	
+	// Parse range header
+	var start, end int64
+	fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
+	
+	if start >= size {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+		http.Error(w, "Requested Range Not Satisfiable", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	
+	end = size - 1
+	
+	if endStr := strings.Split(rangeHeader, "-")[1]; endStr != "" {
+		fmt.Sscanf(endStr, "%d", &end)
+		if end >= size {
+			end = size - 1
+		}
+	}
+	
+	contentLength := end - start + 1
+	
+	file.Seek(start, 0)
+	
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
+	w.WriteHeader(http.StatusPartialContent)
+	
+	io.CopyN(w, file, contentLength)
+}
+func handleBenchmarkPing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "pong", "time": time.Now().Format(time.RFC3339Nano)})
+}
+// Obfuscate response to hide API structure
+func obfuscateHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Remove server header
+		w.Header().Set("Server", "")
+		w.Header().Set("X-Powered-By", "")
+		next(w, r)
+	}
+}
+func handleBenchmarkDownload(w http.ResponseWriter, r *http.Request) {
+	size := 10 * 1024 * 1024 // 10MB
+	if sizeParam := r.URL.Query().Get("size"); sizeParam != "" {
+		if s, err := strconv.Atoi(sizeParam); err == nil {
+			size = s * 1024 * 1024
+		}
+	}
+	
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
+	
+	buffer := make([]byte, 32768)
+	for i := 0; i < size; i += len(buffer) {
+		remaining := size - i
+		if remaining < len(buffer) {
+			w.Write(buffer[:remaining])
+		} else {
+			w.Write(buffer)
+		}
+	}
+}
 
+func handleBenchmarkUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	startTime := time.Now()
+	written, err := io.Copy(io.Discard, r.Body)
+	duration := time.Since(startTime).Seconds()
+	
+	if err != nil {
+		http.Error(w, "Upload error", http.StatusInternalServerError)
+		return
+	}
+	
+	speed := float64(written) / duration / 1024 / 1024
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"bytes":    written,
+		"duration": duration,
+		"speed":    speed,
+	})
+}
+
+func handleBenchmarkDisk(w http.ResponseWriter, r *http.Request) {
+	testFile := filepath.Join(publicDir, ".benchmark_test")
+	defer os.Remove(testFile)
+	
+	// Write test
+	writeStart := time.Now()
+	data := make([]byte, 10*1024*1024) // 10MB
+	writeErr := os.WriteFile(testFile, data, 0644)
+	writeDuration := time.Since(writeStart).Seconds()
+	writeSpeed := float64(len(data)) / writeDuration / 1024 / 1024
+	
+	// Read test
+	readStart := time.Now()
+	_, readErr := os.ReadFile(testFile)
+	readDuration := time.Since(readStart).Seconds()
+	readSpeed := float64(len(data)) / readDuration / 1024 / 1024
+	
+	if writeErr != nil || readErr != nil {
+		http.Error(w, "Disk test error", http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"write_speed": writeSpeed,
+		"read_speed":  readSpeed,
+		"write_time":  writeDuration,
+		"read_time":   readDuration,
+	})
+}
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html>
@@ -487,12 +658,143 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
                 <div class="info-value">` + runtime.Version() + `</div>
             </div>
         </div>
+
+        <div class="system-info" style="margin-top: 16px;">
+            <h2 style="font-size: 18px; font-weight: 500; margin-bottom: 16px;">Performance Benchmark</h2>
+            <div style="display: grid; gap: 12px;">
+                <button class="btn" onclick="runPingTest()" style="width: 100%;">Test Ping</button>
+                <button class="btn" onclick="runDownloadTest()" style="width: 100%;">Test Download Speed</button>
+                <button class="btn" onclick="runUploadTest()" style="width: 100%;">Test Upload Speed</button>
+                <button class="btn" onclick="runDiskTest()" style="width: 100%;">Test Disk Speed</button>
+            </div>
+            <div id="benchmarkResults" style="margin-top: 16px; padding: 16px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 4px; min-height: 100px; font-family: 'SF Mono', monospace; font-size: 12px; white-space: pre-wrap; display: none;"></div>
+        </div>
     </div>
 
     <script>
-        setInterval(() => {
-            location.reload();
-        }, 10000);
+        let autoReloadInterval;
+        let isBenchmarkRunning = false;
+
+        function startAutoReload() {
+            if (!isBenchmarkRunning) {
+                autoReloadInterval = setInterval(() => {
+                    if (!isBenchmarkRunning) {
+                        location.reload();
+                    }
+                }, 10000);
+            }
+        }
+
+        function stopAutoReload() {
+            if (autoReloadInterval) {
+                clearInterval(autoReloadInterval);
+            }
+        }
+
+        startAutoReload();
+
+        function showBenchmarkResult(text) {
+            const results = document.getElementById('benchmarkResults');
+            results.style.display = 'block';
+            results.textContent = text;
+        }
+
+        async function runPingTest() {
+            isBenchmarkRunning = true;
+            stopAutoReload();
+            showBenchmarkResult('Testing ping...');
+            const samples = 10;
+            const pings = [];
+            
+            try {
+                for (let i = 0; i < samples; i++) {
+                    const start = performance.now();
+                    await fetch('/benchmark/ping');
+                    const end = performance.now();
+                    pings.push(end - start);
+                }
+                
+                const avg = pings.reduce((a, b) => a + b, 0) / pings.length;
+                const min = Math.min(...pings);
+                const max = Math.max(...pings);
+                
+                showBenchmarkResult('Ping Test Results:\nAverage: ' + avg.toFixed(2) + ' ms\nMin: ' + min.toFixed(2) + ' ms\nMax: ' + max.toFixed(2) + ' ms');
+            } catch (error) {
+                showBenchmarkResult('Ping test failed: ' + error.message);
+            } finally {
+                isBenchmarkRunning = false;
+                startAutoReload();
+            }
+        }
+
+        async function runDownloadTest() {
+            isBenchmarkRunning = true;
+            stopAutoReload();
+            showBenchmarkResult('Testing download speed...');
+            const size = 10;
+            
+            try {
+                const start = performance.now();
+                const response = await fetch('/benchmark/download?size=' + size);
+                await response.blob();
+                const end = performance.now();
+                
+                const duration = (end - start) / 1000;
+                const speed = (size / duration).toFixed(2);
+                
+                showBenchmarkResult('Download Test Results:\nSize: ' + size + ' MB\nDuration: ' + duration.toFixed(2) + ' seconds\nSpeed: ' + speed + ' MB/s');
+            } catch (error) {
+                showBenchmarkResult('Download test failed: ' + error.message);
+            } finally {
+                isBenchmarkRunning = false;
+                startAutoReload();
+            }
+        }
+
+        async function runUploadTest() {
+            isBenchmarkRunning = true;
+            stopAutoReload();
+            showBenchmarkResult('Testing upload speed...');
+            const size = 10 * 1024 * 1024;
+            const data = new Uint8Array(size);
+            
+            try {
+                const start = performance.now();
+                await fetch('/benchmark/upload', {
+                    method: 'POST',
+                    body: data
+                });
+                const end = performance.now();
+                
+                const duration = (end - start) / 1000;
+                const speed = (size / 1024 / 1024 / duration).toFixed(2);
+                
+                showBenchmarkResult('Upload Test Results:\nSize: 10 MB\nDuration: ' + duration.toFixed(2) + ' seconds\nSpeed: ' + speed + ' MB/s');
+            } catch (error) {
+                showBenchmarkResult('Upload test failed: ' + error.message);
+            } finally {
+                isBenchmarkRunning = false;
+                startAutoReload();
+            }
+        }
+
+        async function runDiskTest() {
+            isBenchmarkRunning = true;
+            stopAutoReload();
+            showBenchmarkResult('Testing disk speed...');
+            
+            try {
+                const response = await fetch('/benchmark/disk');
+                const data = await response.json();
+                
+                showBenchmarkResult('Disk Test Results:\nWrite Speed: ' + data.write_speed.toFixed(2) + ' MB/s\nRead Speed: ' + data.read_speed.toFixed(2) + ' MB/s\nWrite Time: ' + data.write_time.toFixed(3) + ' seconds\nRead Time: ' + data.read_time.toFixed(3) + ' seconds');
+            } catch (error) {
+                showBenchmarkResult('Disk test failed: ' + error.message);
+            } finally {
+                isBenchmarkRunning = false;
+                startAutoReload();
+            }
+        }
     </script>
 </body>
 </html>`
@@ -519,7 +821,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	if isAuth {
 		authStatus = "true"
 		authButtons = `<a href="/ad" class="btn">Admin</a>
-                       <a href="#" onclick="logout()" class="btn">Logout</a>`
+                       <a href="#" onclick="logout(); return false;" class="btn">Logout</a>`
 		uploadSectionDisplay = "block"
 	}
 
@@ -1479,11 +1781,15 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
         function loadFiles() {
             fetch('/files')
-                .then(r => r.json())
+                .then(r => {
+                    if (!r.ok) throw new Error('Failed to load');
+                    return r.json();
+                })
                 .then(files => {
-                    allFiles = files;
+                    allFiles = files || [];
                     const section = document.getElementById('filesSection');
-                    if (files.length === 0) {
+                    
+                    if (!files || files.length === 0) {
                         section.innerHTML = '<div class="empty-state">No files uploaded yet</div>';
                         return;
                     }
@@ -1491,9 +1797,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                     let html = '';
                     files.forEach(f => {
                         const rawUrl = window.location.origin + '/raw/' + encodeURIComponent(f.name);
-                        const escapedName = f.name.replace(/'/g, "\\'");
+                        const escapedName = f.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
                         
-                        let typeBadge = '';
+                        let typeBadge = f.type || 'file';
                         let badgeStyle = '';
                         if (f.type === 'text') {
                             typeBadge = 'text';
@@ -1511,7 +1817,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                             badgeStyle = 'background:#fff3e0;color:#f57c00';
                         }
                         
-                        const modDate = new Date(f.mod_time).toLocaleDateString();
+                        const modDate = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
+                        const fileSize = f.size || 0;
                         
                         html += '<div class="file-item">';
                         html += '<input type="checkbox" class="checkbox file-checkbox" onchange="toggleFileSelect(\'' + escapedName + '\', this)">';
@@ -1519,7 +1826,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                         html += '<div class="file-name">' + escapeHtml(f.name);
                         html += '<span class="file-type-badge" style="' + badgeStyle + '">' + typeBadge + '</span>';
                         html += '</div>';
-                        html += '<div class="file-meta">' + formatFileSize(f.size) + ' • ' + modDate;
+                        html += '<div class="file-meta">' + formatFileSize(fileSize) + ' • ' + modDate;
                         if (f.download_count > 0) {
                             html += ' • ' + f.download_count + ' downloads';
                         }
@@ -1528,7 +1835,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                         html += '</div>';
                         
                         html += '<div class="file-actions">';
-                        html += '<button class="menu-btn" onclick="toggleContextMenu(event, \'' + escapedName + '\')">⋮</button>';
+                        html += '<button class="menu-btn" onclick="toggleContextMenu(event, \'' + escapedName + '\'); return false;">⋮</button>';
                         
                         html += '<div class="context-menu" id="menu-' + escapedName + '">';
                         
@@ -1564,8 +1871,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                     
                     section.innerHTML = html;
                 })
-                .catch(() => {
-                    document.getElementById('filesSection').innerHTML = '<div class="empty-state">Error loading files</div>';
+                .catch(err => {
+                    console.error('Load error:', err);
+                    document.getElementById('filesSection').innerHTML = '<div class="empty-state">Error loading files. Please refresh the page.</div>';
                 });
         }
 
@@ -1684,6 +1992,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
             progressSection.style.display = 'block';
             uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
             startTime = Date.now();
 
             const xhr = new XMLHttpRequest();
@@ -1692,11 +2001,24 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 if (e.lengthComputable) {
                     const percent = (e.loaded / e.total * 100).toFixed(1);
                     progressFill.style.width = percent + '%';
-                    progressText.textContent = percent + '%';
-
+            
                     const elapsed = (Date.now() - startTime) / 1000;
-                    const speed = (e.loaded / elapsed / 1024 / 1024).toFixed(2);
-                    speedText.textContent = speed + ' MB/s';
+                    const speed = elapsed > 0 ? (e.loaded / elapsed / 1024 / 1024).toFixed(2) : '0.00';
+            
+                    const remaining = e.total - e.loaded;
+                    const eta = elapsed > 0 ? remaining / (e.loaded / elapsed) : 0;
+                    const etaMin = Math.floor(eta / 60);
+                    const etaSec = Math.floor(eta % 60);
+            
+                    let etaText = '';
+                    if (eta < 60) {
+                        etaText = ' • ETA: ' + etaSec + 's';
+                    } else {
+                        etaText = ' • ETA: ' + etaMin + 'm ' + etaSec + 's';
+                    }
+            
+                    progressText.textContent = percent + '%' + etaText;
+                    speedText.textContent = speed + ' MB/s • ' + Math.floor(elapsed) + 's elapsed';
                 }
             });
 
@@ -1705,19 +2027,22 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                     showToast('Upload complete - ' + files.length + ' file(s)', 'success');
                     fileInput.value = '';
                     selectedFilesDiv.style.display = 'none';
-                    loadFiles();
+                    setTimeout(() => loadFiles(), 500);
                 } else {
-                    showToast('Upload failed', 'error');
+                    showToast('Upload failed: ' + xhr.statusText, 'error');
                 }
                 progressSection.style.display = 'none';
                 progressFill.style.width = '0%';
                 uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload';
             });
 
             xhr.addEventListener('error', function() {
-                showToast('Upload error', 'error');
+                showToast('Upload error: Network or server issue', 'error');
                 progressSection.style.display = 'none';
+                progressFill.style.width = '0%';
                 uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Upload';
             });
 
             xhr.open('POST', '/upload');
@@ -1743,7 +2068,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 document.getElementById('viewModal').style.display = 'block';
                 setupImageZoom();
             } else if (type === 'video') {
-                viewBody.innerHTML = '<div class="media-viewer"><video controls autoplay><source src="' + url + '"></video></div>';
+                const streamUrl = '/stream/' + encodeURIComponent(filename);
+                viewBody.innerHTML = '<div class="media-viewer" style="background: #000;"><video controls autoplay playsinline webkit-playsinline style="width: 100%; max-height: 70vh;"><source src="' + streamUrl + '" type="video/mp4">Your browser does not support video playback.</video></div>';
                 document.getElementById('viewModal').style.display = 'block';
             } else if (type === 'audio') {
                 viewBody.innerHTML = '<div class="media-viewer" style="background:#fff;"><audio controls autoplay style="width:100%;"><source src="' + url + '"></audio></div>';
@@ -1766,22 +2092,18 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             let startX = 0;
             let startY = 0;
             
-            // Set transform
             function setTransform() {
                 inner.style.transform = 'translate(' + pointX + 'px, ' + pointY + 'px) scale(' + scale + ')';
             }
             
-            // Click to zoom toggle
             img.addEventListener('click', function(e) {
                 e.stopPropagation();
                 
                 if (scale === 1) {
-                    // Zoom in to 2x
                     scale = 2;
                     viewer.classList.add('zoomed');
                     hint.textContent = 'Drag to pan • Click to zoom out • Scroll to adjust';
                 } else {
-                    // Reset zoom
                     scale = 1;
                     pointX = 0;
                     pointY = 0;
@@ -1791,7 +2113,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 setTransform();
             });
             
-            // Mouse wheel zoom
             viewer.addEventListener('wheel', function(e) {
                 e.preventDefault();
                 
@@ -1819,7 +2140,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 setTransform();
             }, { passive: false });
             
-            // Mouse drag to pan
             viewer.addEventListener('mousedown', function(e) {
                 if (scale <= 1) return;
                 e.preventDefault();
@@ -1844,7 +2164,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 panning = false;
             });
             
-            // Touch support
             let initialDistance = 0;
             let initialScale = 1;
             
