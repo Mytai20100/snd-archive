@@ -19,23 +19,46 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const VERSION = "1.3 archive"
+const VERSION = "1.3.2 archive"
 
 type Config struct {
-	IP       string `yaml:"ip"`
-	Port     string `yaml:"port"`
-	SiteName string `yaml:"site_name"`
-	IconURL  string `yaml:"icon_url"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	IP           string `yaml:"ip"`
+	Port         string `yaml:"port"`
+	SiteName     string `yaml:"site_name"`
+	IconURL      string `yaml:"icon_url"`
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	UseHTTPS     bool   `yaml:"use_https"`
+	CertFile     string `yaml:"cert_file"`
+	KeyFile      string `yaml:"key_file"`
+	APIToken     string `yaml:"api_token"`
+	Enable2FA    bool   `yaml:"enable_2fa"`
+	DiscordWebhook string `yaml:"discord_webhook"`
+	SFTPEnabled  bool   `yaml:"sftp_enabled"`
+	SFTPPort     string `yaml:"sftp_port"`
+	SFTPKeyPath  string `yaml:"sftp_key_path"`
 }
-
+type FilePermission struct {
+	IsPublic bool   `json:"is_public"`
+	Token    string `json:"token,omitempty"`
+}
 type FileMetadata struct {
 	Name         string    `json:"name"`
 	Type         string    `json:"type"`
 	Size         int64     `json:"size"`
 	ModTime      time.Time `json:"mod_time"`
 	DownloadCount int      `json:"download_count"`
+}
+type TwoFACode struct {
+	Code      string
+	ExpiresAt time.Time
+	Used      bool
+}
+type ErrorPage struct {
+	StatusCode int
+	Title      string
+	Message    string
+	Details    string
 }
 
 var (
@@ -47,6 +70,10 @@ var (
 	sessionMu  sync.RWMutex
 	downloadCounts = make(map[string]int)
 	downloadMu     sync.RWMutex
+    filePermissions   = make(map[string]FilePermission)
+	permissionMu      sync.RWMutex
+	twoFACodes        = make(map[string]TwoFACode)
+	twoFAMu           sync.RWMutex
 )
 
 func main() {
@@ -61,49 +88,83 @@ func main() {
 	loadDownloadCounts()
 	updateStats()
 
+	// Routes
+    http.HandleFunc("/favicon.ico", handleFavicon)
 	http.HandleFunc("/ac", handleLogin)
 	http.HandleFunc("/login", handleLoginSubmit)
 	http.HandleFunc("/logout", handleLogout)
 	http.HandleFunc("/ad", requireAuth(handleAdmin))
 	http.HandleFunc("/files", obfuscateHandler(handleListFiles))
-    http.HandleFunc("/upload", obfuscateHandler(requireAuth(handleUpload)))
-	http.HandleFunc("/view/", handleView)
-	http.HandleFunc("/stream/", handleStream)
-	http.HandleFunc("/edit/", requireAuth(handleEdit))
-	http.HandleFunc("/save/", requireAuth(handleSave))
-	http.HandleFunc("/raw/", handleRaw)
-	http.HandleFunc("/download/", handleDownload)
+	http.HandleFunc("/upload", obfuscateHandler(requireAuth(handleUpload)))
+	http.HandleFunc("/create-folder", requireAuth(handleCreateFolder))
+	http.HandleFunc("/delete-folder/", requireAuth(handleDeleteFolder))
+	http.HandleFunc("/set-permission", requireAuth(handleSetPermission))
+	http.HandleFunc("/view/", requireTokenOrAuth(handleView)) 
+	http.HandleFunc("/stream/", requireTokenOrAuth(handleStream))
+	http.HandleFunc("/edit/", requireAuth(requireToken(handleEdit)))
+	http.HandleFunc("/save/", requireAuth(requireToken(handleSave)))
+	http.HandleFunc("/raw/", requireTokenOrAuth(handleRaw)) 
+    http.HandleFunc("/download/", requireTokenOrAuth(handleDownload))
 	http.HandleFunc("/delete/", requireAuth(handleDelete))
 	http.HandleFunc("/rename/", requireAuth(handleRename))
 	http.HandleFunc("/duplicate/", requireAuth(handleDuplicate))
 	http.HandleFunc("/zip-multiple", requireAuth(handleZipMultiple))
 	http.HandleFunc("/zip-view/", handleZipView)
 	http.HandleFunc("/benchmark/ping", handleBenchmarkPing)
-    http.HandleFunc("/benchmark/download", handleBenchmarkDownload)
-    http.HandleFunc("/benchmark/upload", handleBenchmarkUpload)
-    http.HandleFunc("/benchmark/disk", requireAuth(handleBenchmarkDisk))
+	http.HandleFunc("/benchmark/download", handleBenchmarkDownload)
+	http.HandleFunc("/benchmark/upload", handleBenchmarkUpload)
+	http.HandleFunc("/benchmark/disk", requireAuth(handleBenchmarkDisk))
 	http.HandleFunc("/", handleIndex)
 
 	addr := config.IP + ":" + config.Port
 	fmt.Printf("ServerNotDie v%s\n", VERSION)
-	fmt.Printf("Server starting on http://%s\n", addr)
-	fmt.Printf("Site Name: %s\n", config.SiteName)
-	fmt.Printf("Public directory: %s\n", publicDir)
-	fmt.Printf("Debug mode: %v\n", debug)
+	fmt.Printf("Server starting on %s://%s\n", getProtocol(), addr)
+	fmt.Printf("API Token: `%s`\n", config.APIToken)
+	fmt.Printf("2FA Enabled: %v\n", config.Enable2FA)
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	if config.SFTPEnabled {
+		go startSFTPServer()
 	}
+
+	if config.UseHTTPS {
+		if err := http.ListenAndServeTLS(addr, config.CertFile, config.KeyFile, nil); err != nil {
+			log.Fatalf("HTTPS Server failed: %v", err)
+		}
+	} else {
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.Fatalf("HTTP Server failed: %v", err)
+		}
+	}
+}
+
+func startSFTPServer() {
+	panic("unimplemented")
+}
+
+func getProtocol() string {
+	if config.UseHTTPS {
+		return "https"
+	}
+	return "http"
 }
 
 func loadConfig() Config {
 	cfg := Config{
-		IP:       "0.0.0.0",
-		Port:     "8080",
-		SiteName: "servernotdie",
-		IconURL:  "https://cdn-icons-png.flaticon.com/512/716/716784.png",
-		Username: "admin",
-		Password: "admin",
+		IP:             "0.0.0.0",
+		Port:           "8080",
+		SiteName:       "servernotdie",
+		IconURL:        "https://cdn-icons-png.flaticon.com/512/716/716784.png",
+		Username:       "admin",
+		Password:       "admin",
+		UseHTTPS:       true,
+		CertFile:       "server.crt",
+		KeyFile:        "server.key",
+		APIToken:       generateRandomToken(82),
+		Enable2FA:      false,
+		DiscordWebhook: "",
+		SFTPEnabled:    false,
+		SFTPPort:       "2022",
+		SFTPKeyPath:    "sftp_key.pem",
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -113,12 +174,287 @@ func loadConfig() Config {
 		data, _ := yaml.Marshal(cfg)
 		os.WriteFile(configFile, data, 0644)
 		fmt.Printf("Created default config file: %s\n", configFile)
-		fmt.Printf("Default username: admin, password: admin\n")
+		fmt.Printf("Default API Token: %s\n", cfg.APIToken)
 	}
 
+	loadFilePermissions()
 	return cfg
 }
 
+func generateRandomToken(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+	}
+	return string(b)
+}
+func requireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := extractFilename(r.URL.Path)
+		
+		// Check if file is public
+		permissionMu.RLock()
+		perm, exists := filePermissions[filename]
+		permissionMu.RUnlock()
+		
+		if exists && perm.IsPublic {
+			// Public file - chỉ cần token
+			handler(w, r)
+			return
+		}
+		
+		// Private file - cần cả token VÀ session
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			token = r.Header.Get("X-API-Token")
+		}
+		
+		if token != config.APIToken {
+			http.Error(w, "Unauthorized: Invalid or missing token", http.StatusUnauthorized)
+			return
+		}
+		
+		// Check session for private files
+		cookie, err := r.Cookie("session")
+		if err != nil {
+			http.Error(w, "Unauthorized: Login required for private files", http.StatusUnauthorized)
+			return
+		}
+		
+		sessionMu.RLock()
+		expiry, exists := sessions[cookie.Value]
+		sessionMu.RUnlock()
+		
+		if !exists || time.Now().After(expiry) {
+			http.Error(w, "Unauthorized: Session expired", http.StatusUnauthorized)
+			return
+		}
+		
+		handler(w, r)
+	}
+}
+func loadFilePermissions() {
+	data, err := os.ReadFile("file_permissions.json")
+	if err == nil {
+		json.Unmarshal(data, &filePermissions)
+	}
+}
+
+func saveFilePermissions() {
+	permissionMu.RLock()
+	data, _ := json.Marshal(filePermissions)
+	permissionMu.RUnlock()
+	os.WriteFile("file_permissions.json", data, 0644)
+}
+func requireToken(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := extractFilename(r.URL.Path)
+		
+		permissionMu.RLock()
+		perm, exists := filePermissions[filename]
+		permissionMu.RUnlock()
+		if exists && perm.IsPublic {
+			handler(w, r)
+			return
+		}
+		
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			token = r.Header.Get("X-API-Token")
+		}
+		
+		if token != config.APIToken {
+			http.Error(w, "Unauthorized: Invalid or missing token", http.StatusUnauthorized)
+			return
+		}
+		
+		handler(w, r)
+	}
+}
+func send2FACodeToDiscord(username string, code string) error {
+	if config.DiscordWebhook == "" {
+		return fmt.Errorf("Discord webhook not configured")
+	}
+	
+	payload := map[string]interface{}{
+		"content": fmt.Sprintf(" **2FA Code for %s**\n\n```\n%s\n```\n\n Expires in 5 minutes", username, code),
+		"username": config.SiteName,
+	}
+	
+	jsonData, _ := json.Marshal(payload)
+	resp, err := http.Post(config.DiscordWebhook, "application/json", strings.NewReader(string(jsonData)))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 204 && resp.StatusCode != 200 {
+		return fmt.Errorf("Discord webhook failed with status: %d", resp.StatusCode)
+	}
+	
+	return nil
+}
+func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	var req struct {
+		Path        string `json:"path"`
+		CurrentPath string `json:"current_path"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	
+	// Validate
+	if strings.Contains(req.Path, "..") || strings.Contains(req.CurrentPath, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	
+	fullPath := filepath.Join(publicDir, req.CurrentPath, req.Path)
+	err := os.MkdirAll(fullPath, 0755)
+	if err != nil {
+		http.Error(w, "Failed to create folder", http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Folder created successfully"})
+}
+
+func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	folderName := r.URL.Path[len("/delete-folder/"):]
+	folderPath := filepath.Join(publicDir, folderName)
+	
+	err := os.RemoveAll(folderPath)
+	if err != nil {
+		http.Error(w, "Failed to delete folder", http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Folder deleted successfully"})
+}
+
+func handleSetPermission(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	var req struct {
+		Filename string `json:"filename"`
+		IsPublic bool   `json:"is_public"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	
+	permissionMu.Lock()
+	filePermissions[req.Filename] = FilePermission{
+		IsPublic: req.IsPublic,
+		Token:    config.APIToken,
+	}
+	permissionMu.Unlock()
+	
+	saveFilePermissions()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Permission updated successfully"})
+}
+func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		TwoFACode string `json:"twofa_code,omitempty"`
+	}
+	json.NewDecoder(r.Body).Decode(&creds)
+
+	if creds.Username != config.Username || creds.Password != config.Password {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid credentials",
+		})
+		return
+	}
+
+	if config.Enable2FA {
+		if creds.TwoFACode == "" {
+			code := generateRandomToken(82)
+			twoFAMu.Lock()
+			twoFACodes[creds.Username] = TwoFACode{
+				Code:      code,
+				ExpiresAt: time.Now().Add(5 * time.Minute),
+				Used:      false,
+			}
+			twoFAMu.Unlock()
+			if err := send2FACodeToDiscord(creds.Username, code); err != nil {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "Failed to send 2FA code",
+				})
+				return
+			}
+			
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"require_2fa": true,
+				"message": "2FA code sent to Discord. Please check your webhook.",
+			})
+			return
+		}
+		
+		twoFAMu.Lock()
+		storedCode, exists := twoFACodes[creds.Username]
+		twoFAMu.Unlock()
+		
+		if !exists || storedCode.Used || time.Now().After(storedCode.ExpiresAt) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "2FA code expired or invalid",
+			})
+			return
+		}
+		
+		if creds.TwoFACode != storedCode.Code {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Invalid 2FA code",
+			})
+			return
+		}
+		twoFAMu.Lock()
+		storedCode.Used = true
+		twoFACodes[creds.Username] = storedCode
+		twoFAMu.Unlock()
+	}
+
+	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
+	sessionMu.Lock()
+	sessions[sessionID] = time.Now().Add(24 * time.Hour)
+	sessionMu.Unlock()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    sessionID,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+	})
+
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+func extractFilename(path string) string {
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
 func loadDownloadCounts() {
 	data, err := os.ReadFile("download_counts.json")
 	if err == nil {
@@ -136,36 +472,222 @@ func saveDownloadCounts() {
 func getFileType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	textExts := []string{".txt", ".log", ".md", ".json", ".xml", ".html", ".css", ".js", ".yml", ".yaml", ".conf", ".cfg", ".sh", ".bat", ".py", ".go", ".java", ".c", ".cpp", ".h", ".php", ".rb", ".rs", ".sql"}
+	// Text & Code files
+	textExts := []string{
+		".txt", ".log", ".md", ".markdown", ".json", ".xml", ".html", ".htm", ".css", ".js", 
+		".jsx", ".ts", ".tsx", ".yml", ".yaml", ".toml", ".ini", ".conf", ".cfg", ".config",
+		".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1", ".psm1",
+		".py", ".pyc", ".pyw", ".pyx", ".go", ".java", ".class", ".jar",
+		".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx",
+		".php", ".phtml", ".php3", ".php4", ".php5", ".phps",
+		".rb", ".rake", ".rbw", ".rs", ".rlib",
+		".sql", ".sqlite", ".db",
+		".swift", ".kt", ".kts", ".scala", ".groovy",
+		".r", ".rdata", ".rds",
+		".pl", ".pm", ".t", ".pod",
+		".lua", ".vim", ".vimrc",
+		".dockerfile", ".makefile", ".cmake",
+		".proto", ".thrift",
+		".graphql", ".gql",
+		".vue", ".svelte",
+		".dart", ".ex", ".exs", ".erl", ".hrl",
+		".clj", ".cljs", ".cljc", ".edn",
+		".elm", ".purs",
+		".diff", ".patch",
+		".gitignore", ".gitattributes", ".editorconfig",
+		".env", ".properties",
+		".csv", ".tsv",
+	}
 	for _, e := range textExts {
 		if ext == e {
 			return "text"
 		}
 	}
 
-	imageExts := []string{".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico"}
+	// Image files
+	imageExts := []string{
+		".jpg", ".jpeg", ".jpe", ".jfif",
+		".png", ".apng",
+		".gif",
+		".bmp", ".dib",
+		".webp",
+		".svg", ".svgz",
+		".ico", ".icon",
+		".tif", ".tiff",
+		".psd", ".psb",
+		".ai", ".eps",
+		".raw", ".cr2", ".nef", ".orf", ".sr2",
+		".heic", ".heif",
+		".avif",
+		".jxl",
+		".xcf",
+		".sketch",
+	}
 	for _, e := range imageExts {
 		if ext == e {
 			return "image"
 		}
 	}
 
-	videoExts := []string{".mp4", ".webm", ".ogg", ".mov", ".avi", ".mkv", ".flv", ".wmv"}
+	// Video files
+	videoExts := []string{
+		".mp4", ".m4v", ".m4p",
+		".webm",
+		".ogg", ".ogv",
+		".mov", ".qt",
+		".avi",
+		".mkv", ".mk3d", ".mka", ".mks",
+		".flv", ".f4v",
+		".wmv", ".asf",
+		".mpg", ".mpeg", ".mpe", ".mpv", ".m2v",
+		".3gp", ".3g2",
+		".vob",
+		".ts", ".m2ts", ".mts",
+		".divx",
+		".rm", ".rmvb",
+		".swf",
+	}
 	for _, e := range videoExts {
 		if ext == e {
 			return "video"
 		}
 	}
 
-	audioExts := []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
+	// Audio files
+	audioExts := []string{
+		".mp3",
+		".wav", ".wave",
+		".ogg", ".oga", ".opus",
+		".m4a", ".m4b", ".m4p",
+		".flac",
+		".aac",
+		".wma",
+		".aiff", ".aif", ".aifc",
+		".ape",
+		".alac",
+		".mid", ".midi",
+		".ra", ".ram",
+		".wv",
+		".tta",
+		".mka",
+		".dsd", ".dsf", ".dff",
+		".amr",
+		".awb",
+	}
 	for _, e := range audioExts {
 		if ext == e {
 			return "audio"
 		}
 	}
 
-	if ext == ".zip" || ext == ".rar" || ext == ".7z" || ext == ".tar" || ext == ".gz" {
-		return "archive"
+	// Archive files
+	archiveExts := []string{
+		".zip", ".zipx",
+		".rar", ".rev", ".r00", ".r01",
+		".7z",
+		".tar",
+		".gz", ".gzip", ".tgz",
+		".bz2", ".bzip2", ".tbz2",
+		".xz", ".txz",
+		".zst", ".zstd",
+		".lz", ".lzma", ".tlz",
+		".lz4",
+		".z",
+		".cab",
+		".iso", ".img", ".dmg",
+		".ace",
+		".arj",
+		".jar", ".war", ".ear",
+		".apk", ".ipa",
+		".deb", ".rpm",
+		".pkg",
+		".msi",
+		".exe", // Windows installer archives
+	}
+	for _, e := range archiveExts {
+		if ext == e {
+			return "archive"
+		}
+	}
+
+	// Document files
+	documentExts := []string{
+		".pdf",
+		".doc", ".docx", ".docm", ".dot", ".dotx", ".dotm",
+		".xls", ".xlsx", ".xlsm", ".xlsb", ".xlt", ".xltx", ".xltm",
+		".ppt", ".pptx", ".pptm", ".pot", ".potx", ".potm", ".pps", ".ppsx", ".ppsm",
+		".odt", ".ods", ".odp", ".odg", ".odf",
+		".rtf",
+		".tex", ".latex",
+		".epub", ".mobi", ".azw", ".azw3",
+		".djvu", ".djv",
+		".pages", ".numbers", ".key",
+	}
+	for _, e := range documentExts {
+		if ext == e {
+			return "document"
+		}
+	}
+
+	// Font files
+	fontExts := []string{
+		".ttf", ".otf", ".woff", ".woff2", ".eot",
+		".fon", ".fnt",
+	}
+	for _, e := range fontExts {
+		if ext == e {
+			return "font"
+		}
+	}
+
+	// 3D Model files
+	modelExts := []string{
+		".obj", ".fbx", ".dae", ".3ds", ".blend", ".stl", ".ply",
+		".gltf", ".glb", ".usdz",
+	}
+	for _, e := range modelExts {
+		if ext == e {
+			return "3d-model"
+		}
+	}
+
+	// Certificate & Key files
+	certExts := []string{
+		".pem", ".crt", ".cer", ".der",
+		".key", ".pub",
+		".p12", ".pfx", ".p7b", ".p7c",
+		".csr",
+		".jks", ".keystore",
+	}
+	for _, e := range certExts {
+		if ext == e {
+			return "certificate"
+		}
+	}
+
+	// Database files
+	databaseExts := []string{
+		".db", ".sqlite", ".sqlite3",
+		".mdb", ".accdb",
+		".dbf",
+		".frm", ".myd", ".myi",
+	}
+	for _, e := range databaseExts {
+		if ext == e {
+			return "database"
+		}
+	}
+
+	// Backup files
+	backupExts := []string{
+		".bak", ".backup", ".old", ".orig",
+		".swp", ".swo", ".tmp",
+		"~",
+	}
+	for _, e := range backupExts {
+		if ext == e {
+			return "backup"
+		}
 	}
 
 	return "binary"
@@ -176,7 +698,10 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	
 	file, err := os.Open(filePath)
 	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
+		renderErrorPage(w, http.StatusNotFound, 
+            "File Not Found", 
+            "The file you're looking for doesn't exist.",
+            "Path: " + r.URL.Path)
 		return
 	}
 	defer file.Close()
@@ -341,6 +866,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 <html>
 <head>
     <title>Login</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         body { 
             display: flex; 
@@ -374,68 +900,51 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
     <div class="login-box">
-        <h2>Login</h2>
-        <form onsubmit="login(event)">
-            <input type="text" id="username" placeholder="Username" required>
-            <input type="password" id="password" placeholder="Password" required>
-            <button type="submit">Login</button>
-        </form>
-    </div>
-    <script>
-        function login(e) {
-            e.preventDefault();
-            fetch('/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    username: document.getElementById('username').value,
-                    password: document.getElementById('password').value
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    window.location.href = '/';
-                } else {
-                    alert(data.message);
-                }
-            });
+    <h2>Login</h2>
+    <form onsubmit="login(event)">
+        <input type="text" id="username" placeholder="Username" required>
+        <input type="password" id="password" placeholder="Password" required>
+        <input type="text" id="twofa" placeholder="2FA Code (if enabled)" style="display:none;">
+        <button type="submit">Login</button>
+    </form>
+    <div id="twofa-message" style="margin-top: 16px; padding: 12px; background: #f5f5f5; display: none; font-size: 12px;"></div>
+</div>
+<script>
+    function login(e) {
+        e.preventDefault();
+        const payload = {
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+        };
+        
+        const twofaCode = document.getElementById('twofa').value;
+        if (twofaCode) {
+            payload.twofa_code = twofaCode;
         }
-    </script>
+        
+        fetch('/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                window.location.href = '/';
+            } else if (data.require_2fa) {
+                document.getElementById('twofa').style.display = 'block';
+                document.getElementById('twofa-message').style.display = 'block';
+                document.getElementById('twofa-message').innerHTML = ' ' + data.message + '<br><small>Check your Discord for the 82-character code</small>';
+            } else {
+                alert(data.message);
+            }
+        });
+    }
+</script>
 </body>
 </html>`
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(html))
-}
-
-func handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
-	var creds struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	json.NewDecoder(r.Body).Decode(&creds)
-
-	if creds.Username == config.Username && creds.Password == config.Password {
-		sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
-
-		sessionMu.Lock()
-		sessions[sessionID] = time.Now().Add(24 * time.Hour)
-		sessionMu.Unlock()
-
-		http.SetCookie(w, &http.Cookie{
-			Name:     "session",
-			Value:    sessionID,
-			Expires:  time.Now().Add(24 * time.Hour),
-			HttpOnly: true,
-		})
-
-		json.NewEncoder(w).Encode(map[string]bool{"success": true})
-	} else {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "Invalid credentials",
-		})
-	}
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +1036,7 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 <html>
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin - ` + config.SiteName + `</title>
     <style>
@@ -801,7 +1311,6 @@ func handleAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
 }
-
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	isAuth := false
 	cookie, err := r.Cookie("session")
@@ -817,17 +1326,36 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	authStatus := "false"
 	authButtons := `<a href="/ac" class="btn">Login</a>`
 	uploadSectionDisplay := "none"
+	apiTokenSection := ""
 
 	if isAuth {
 		authStatus = "true"
-		authButtons = `<a href="/ad" class="btn">Admin</a>
+		authButtons = `<button class="btn" onclick="createFolder()">New Folder</button>
+                       <a href="/ad" class="btn">Admin</a>
                        <a href="#" onclick="logout(); return false;" class="btn">Logout</a>`
 		uploadSectionDisplay = "block"
+		apiTokenSection = `
+        <div class="upload-section" id="apiTokenSection" style="background: #fff3e0; border: 2px solid #f57c00; position: relative;">
+            <button onclick="closeApiTokenSection()" style="position: absolute; top: 8px; right: 8px; background: none; border: none; font-size: 20px; color: #e65100; cursor: pointer; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 4px;" onmouseover="this.style.background='#ffccbc'" onmouseout="this.style.background='none'" title="Hide API Token">&times;</button>
+            <div style="padding: 12px;">
+                <div style="font-size: 13px; font-weight: 500; color: #e65100; margin-bottom: 8px;">API Token</div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="password" id="apiTokenDisplay" value="` + config.APIToken + `" readonly 
+                           style="flex: 1; padding: 8px; border: 1px solid #f57c00; background: white; font-family: monospace; font-size: 12px;">
+                    <button class="btn" onclick="toggleTokenVisibility()" style="white-space: nowrap;">Show</button>
+                    <button class="btn" onclick="copyToken()" style="white-space: nowrap;">Copy</button>
+                </div>
+                <div style="font-size: 11px; color: #e65100; margin-top: 8px;">
+                    Token is automatically added to file URLs. Share links will include the token.
+                </div>
+            </div>
+        </div>`
 	}
 
 	html := `<!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <title>` + config.SiteName + `</title>
@@ -884,7 +1412,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         }
         .btn:hover { background: #333; }
         
-        /* Search Box */
         .search-overlay {
             display: none;
             position: fixed;
@@ -1033,7 +1560,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             color: #666;
         }
         
-        /* Bulk select mode */
         .bulk-actions {
             display: none;
             padding: 16px 20px;
@@ -1111,7 +1637,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             position: relative;
         }
         
-        /* Context Menu */
         .menu-btn {
             padding: 6px 12px;
             background: white;
@@ -1280,7 +1805,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             border-radius: 4px;
         }
         
-        /* Image Viewer - Fixed Zoom */
         .media-viewer {
             text-align: center;
             background: #000;
@@ -1445,10 +1969,69 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 font-size: 13px;
             }
         }
+            .toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #f44336;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+    background-color: #4caf50;
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+}
+
+.toggle-slider:after {
+    content: 'Private';
+    position: absolute;
+    right: 8px;
+    top: 4px;
+    font-size: 9px;
+    color: white;
+    font-weight: 500;
+}
+
+input:checked + .toggle-slider:after {
+    content: 'Public';
+    left: 8px;
+    right: auto;
+}
     </style>
 </head>
 <body>
-    <!-- Search Overlay (Ctrl+F) -->
     <div class="search-overlay" id="searchOverlay">
         <div class="search-box">
             <input type="text" class="search-input" id="searchInput" placeholder="Search files..." autocomplete="off">
@@ -1465,7 +2048,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 ` + authButtons + `
             </div>
         </div>
-        
+        <div style="padding: 12px 20px; background: #f5f5f5; border-bottom: 1px solid #e0e0e0; font-size: 13px;" id="breadcrumb">
+            <span style="color: #666;">Root</span>
+        </div>
         <div class="upload-section">
             <div class="upload-area" id="uploadArea">
                 <input type="file" id="fileInput" multiple>
@@ -1476,7 +2061,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             <div class="selected-files" id="selectedFiles" style="display: none;"></div>
             <button class="upload-btn" onclick="uploadFiles()">Upload</button>
         </div>
-
+        ` + apiTokenSection + `
         <div class="progress-section" id="progressSection">
             <div class="progress-bar">
                 <div class="progress-fill" id="progressFill"></div>
@@ -1487,7 +2072,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
-        <!-- Bulk Actions -->
         <div class="bulk-actions" id="bulkActions">
             <span id="selectedCount" style="font-size: 14px; color: #666;">0 selected</span>
             <button class="btn-small" onclick="downloadSelectedAsZip()">Download as ZIP</button>
@@ -1499,7 +2083,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Modals -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -1543,19 +2126,112 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
     </div>
-
+    <div class="modal" id="createFolderModal">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3>Create New Folder</h3>
+            <button class="close-btn" onclick="closeModal('createFolderModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <input type="text" id="folderNameInput" placeholder="Enter folder name" 
+                   style="width: 100%; padding: 12px; border: 1px solid #e0e0e0; font-size: 14px; border-radius: 4px;">
+        </div>
+        <div class="modal-footer">
+            <button class="btn-small" onclick="closeModal('createFolderModal')">Cancel</button>
+            <button class="btn-small" onclick="confirmCreateFolder()">Create</button>
+        </div>
+    </div>
+</div>
     <div class="footer">
         <strong>ServerNotDie</strong> v` + VERSION + `
     </div>
 
     <script>
+        let currentPath = '';
         const isAuthenticated = ` + authStatus + `;
         let startTime, currentEditFile, currentRenameFile;
         let allFiles = [];
         let selectedFiles = new Set();
         let bulkMode = false;
 
-        // Keyboard shortcuts
+        function closeApiTokenSection() {
+            const section = document.getElementById('apiTokenSection');
+            if (section) {
+                section.style.display = 'none';
+                localStorage.setItem('hideApiToken', 'true');
+                showToast('API Token section hidden', 'success');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const hideApiToken = localStorage.getItem('hideApiToken');
+            const section = document.getElementById('apiTokenSection');
+            if (hideApiToken === 'true' && section) {
+                section.style.display = 'none';
+            }
+        });
+
+        function toggleTokenVisibility() {
+            const tokenInput = document.getElementById('apiTokenDisplay');
+            const btn = event.target;
+            
+            if (tokenInput.type === 'password') {
+                tokenInput.type = 'text';
+                btn.textContent = 'Hide';
+            } else {
+                tokenInput.type = 'password';
+                btn.textContent = 'Show';
+            }
+        }
+
+        function copyToken() {
+            const tokenInput = document.getElementById('apiTokenDisplay');
+            tokenInput.select();
+            tokenInput.setSelectionRange(0, 99999);
+            
+            navigator.clipboard.writeText(tokenInput.value).then(() => {
+                showToast('API Token copied!', 'success');
+            }).catch(() => {
+                showToast('Failed to copy token', 'error');
+            });
+        }
+
+        function navigateToFolder(folderName) {
+            currentPath = folderName;
+            loadFiles();
+            updateBreadcrumb();
+        }
+
+        function navigateToRoot() {
+            currentPath = '';
+            loadFiles();
+            updateBreadcrumb();
+        }
+
+        function updateBreadcrumb() {
+            const breadcrumb = document.getElementById('breadcrumb');
+            if (!breadcrumb) return;
+            
+            if (currentPath === '') {
+                breadcrumb.innerHTML = '<span style="color: #666;">📁 Root</span>';
+            } else {
+                const parts = currentPath.split('/').filter(p => p);
+                let html = '<a href="#" onclick="navigateToRoot(); return false;" style="color: #0066cc; text-decoration: none;">📁 Root</a>';
+                
+                let pathSoFar = '';
+                parts.forEach((part, index) => {
+                    pathSoFar += (pathSoFar ? '/' : '') + part;
+                    if (index === parts.length - 1) {
+                        html += ' / <span style="color: #666;">' + escapeHtml(part) + '</span>';
+                    } else {
+                        const navPath = pathSoFar;
+                        html += ' / <a href="#" onclick="currentPath=\'' + navPath.replace(/'/g, "\\'") + '\'; loadFiles(); updateBreadcrumb(); return false;" style="color: #0066cc; text-decoration: none;">' + escapeHtml(part) + '</a>';
+                    }
+                });
+                breadcrumb.innerHTML = html;
+            }
+        }
+
         document.addEventListener('keydown', function(e) {
             if (e.ctrlKey && e.key === 'f') {
                 e.preventDefault();
@@ -1771,111 +2447,347 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         }
 
         function copyLink(filename) {
-            const url = window.location.origin + '/raw/' + encodeURIComponent(filename);
+            const baseUrl = window.location.origin + '/raw/' + encodeURIComponent(filename);
+            const url = addTokenToURL(baseUrl);
+            
             navigator.clipboard.writeText(url).then(() => {
-                showToast('Link copied to clipboard', 'success');
+                showToast('Link with token copied!', 'success');
             }).catch(() => {
-                showToast('Failed to copy link', 'error');
+                const textArea = document.createElement('textarea');
+                textArea.value = url;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showToast('Link with token copied!', 'success');
+                } catch (err) {
+                    showToast('Failed to copy link', 'error');
+                }
+                document.body.removeChild(textArea);
+            });
+        }
+        function togglePublicAccessSwitch(filename, isPublic) {
+    fetch('/set-permission', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            filename: filename,
+            is_public: isPublic
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        const status = isPublic ? 'PUBLIC' : 'PRIVATE';
+        showToast(filename + ' is now ' + status, 'success');
+        loadFiles();
+    })
+    .catch(() => {
+        showToast('Failed to update permission', 'error');
+        loadFiles();
+    });
+}
+
+function createFolder() {
+    document.getElementById('folderNameInput').value = '';
+    document.getElementById('createFolderModal').style.display = 'block';
+    document.getElementById('folderNameInput').focus();
+}
+
+function confirmCreateFolder() {
+    const folderName = document.getElementById('folderNameInput').value.trim();
+    
+    if (!folderName) {
+        showToast('Please enter a folder name', 'error');
+        return;
+    }
+    
+    if (folderName.includes('..') || folderName.includes('/') || folderName.includes('\\')) {
+        showToast('Invalid folder name', 'error');
+        return;
+    }
+    
+    fetch('/create-folder', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            path: folderName,
+            current_path: currentPath
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        showToast(data.message, 'success');
+        closeModal('createFolderModal');
+        loadFiles();
+    })
+    .catch(() => {
+        showToast('Failed to create folder', 'error');
+    });
+}
+        function togglePublicAccess(filename) {
+            const currentStatus = prompt('Enter "public" to make accessible without token, or "private" to require token:', 'public');
+            
+            if (!currentStatus || (currentStatus !== 'public' && currentStatus !== 'private')) {
+                return;
+            }
+            
+            const isPublic = currentStatus === 'public';
+            
+            fetch('/set-permission', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    filename: filename,
+                    is_public: isPublic
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                const status = isPublic ? 'PUBLIC' : 'PRIVATE';
+                showToast(filename + ' is now ' + status, 'success');
+                loadFiles();
+            })
+            .catch(() => {
+                showToast('Failed to update permission', 'error');
             });
         }
 
-        function loadFiles() {
-            fetch('/files')
-                .then(r => {
-                    if (!r.ok) throw new Error('Failed to load');
-                    return r.json();
+        function createFolder() {
+            const folderName = prompt('Enter folder name:');
+            if (!folderName) return;
+            
+            if (folderName.includes('..') || folderName.includes('/') || folderName.includes('\\')) {
+                showToast('Invalid folder name', 'error');
+                return;
+            }
+            
+            fetch('/create-folder', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    path: folderName,
+                    current_path: currentPath
                 })
-                .then(files => {
-                    allFiles = files || [];
-                    const section = document.getElementById('filesSection');
-                    
-                    if (!files || files.length === 0) {
-                        section.innerHTML = '<div class="empty-state">No files uploaded yet</div>';
-                        return;
-                    }
-                    
-                    let html = '';
-                    files.forEach(f => {
-                        const rawUrl = window.location.origin + '/raw/' + encodeURIComponent(f.name);
-                        const escapedName = f.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                        
-                        let typeBadge = f.type || 'file';
-                        let badgeStyle = '';
-                        if (f.type === 'text') {
-                            typeBadge = 'text';
-                        } else if (f.type === 'image') {
-                            typeBadge = 'image';
-                            badgeStyle = 'background:#e3f2fd;color:#1976d2';
-                        } else if (f.type === 'video') {
-                            typeBadge = 'video';
-                            badgeStyle = 'background:#fce4ec;color:#c2185b';
-                        } else if (f.type === 'audio') {
-                            typeBadge = 'audio';
-                            badgeStyle = 'background:#f3e5f5;color:#7b1fa2';
-                        } else if (f.type === 'archive') {
-                            typeBadge = 'zip';
-                            badgeStyle = 'background:#fff3e0;color:#f57c00';
-                        }
-                        
-                        const modDate = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
-                        const fileSize = f.size || 0;
-                        
-                        html += '<div class="file-item">';
-                        html += '<input type="checkbox" class="checkbox file-checkbox" onchange="toggleFileSelect(\'' + escapedName + '\', this)">';
-                        html += '<div class="file-info">';
-                        html += '<div class="file-name">' + escapeHtml(f.name);
-                        html += '<span class="file-type-badge" style="' + badgeStyle + '">' + typeBadge + '</span>';
-                        html += '</div>';
-                        html += '<div class="file-meta">' + formatFileSize(fileSize) + ' • ' + modDate;
-                        if (f.download_count > 0) {
-                            html += ' • ' + f.download_count + ' downloads';
-                        }
-                        html += '</div>';
-                        html += '<div class="file-link" onclick="copyLink(\'' + escapedName + '\')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
-                        html += '</div>';
-                        
-                        html += '<div class="file-actions">';
-                        html += '<button class="menu-btn" onclick="toggleContextMenu(event, \'' + escapedName + '\'); return false;">⋮</button>';
-                        
-                        html += '<div class="context-menu" id="menu-' + escapedName + '">';
-                        
-                        if (f.type === 'text') {
-                            html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'text\')">View</div>';
-                            if (isAuthenticated) {
-                                html += '<div class="context-menu-item" onclick="editFile(\'' + escapedName + '\')">Edit</div>';
-                            }
-                        } else if (f.type === 'image') {
-                            html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'image\')">View</div>';
-                        } else if (f.type === 'video') {
-                            html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'video\')">Play</div>';
-                        } else if (f.type === 'audio') {
-                            html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'audio\')">Play</div>';
-                        } else if (f.type === 'archive') {
-                            html += '<div class="context-menu-item" onclick="viewZipContents(\'' + escapedName + '\')">View contents</div>';
-                        }
-                        
-                        html += '<div class="context-menu-item" onclick="downloadFile(\'' + escapedName + '\')">Download</div>';
-                        html += '<div class="context-menu-item" onclick="copyLink(\'' + escapedName + '\')">Copy link</div>';
-                        html += '<div class="context-menu-item" onclick="downloadAsZip(\'' + escapedName + '\')">Download as ZIP</div>';
-                        
-                        if (isAuthenticated) {
-                            html += '<div class="context-menu-item" onclick="renameFile(\'' + escapedName + '\')">Rename</div>';
-                            html += '<div class="context-menu-item" onclick="duplicateFile(\'' + escapedName + '\')">Duplicate</div>';
-                            html += '<div class="context-menu-item danger" onclick="deleteFile(\'' + escapedName + '\')">Delete</div>';
-                        }
-                        
-                        html += '</div>';
-                        html += '</div>';
-                        html += '</div>';
-                    });
-                    
-                    section.innerHTML = html;
-                })
-                .catch(err => {
-                    console.error('Load error:', err);
-                    document.getElementById('filesSection').innerHTML = '<div class="empty-state">Error loading files. Please refresh the page.</div>';
-                });
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast(data.message, 'success');
+                loadFiles();
+            })
+            .catch(() => {
+                showToast('Failed to create folder', 'error');
+            });
         }
+
+        function deleteFolder(folderName) {
+            const confirmText = prompt('Type "DELETE" to confirm deletion of folder: ' + folderName);
+            
+            if (confirmText !== 'DELETE') {
+                showToast('Deletion cancelled', 'error');
+                return;
+            }
+            
+            fetch('/delete-folder/' + encodeURIComponent(folderName), {
+                method: 'DELETE'
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast(data.message, 'success');
+                loadFiles();
+            })
+            .catch(() => {
+                showToast('Failed to delete folder', 'error');
+            });
+        }
+
+        function addTokenToURL(url) {
+            const token = document.getElementById('apiTokenDisplay') ? 
+                          document.getElementById('apiTokenDisplay').value : 
+                          '` + config.APIToken + `';
+            return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+        }
+
+        function loadFiles() {
+    const url = currentPath ? '/files?path=' + encodeURIComponent(currentPath) : '/files';
+    
+    fetch(url)
+        .then(r => {
+            if (!r.ok) throw new Error('Failed to load');
+            return r.json();
+        })
+        .then(data => {
+            let files = [];
+            let folders = [];
+            
+            if (Array.isArray(data)) {
+                files = data;
+            } else {
+                files = data.files || [];
+                folders = data.folders || [];
+            }
+            
+            allFiles = files;
+            const section = document.getElementById('filesSection');
+            
+            if (folders.length === 0 && files.length === 0) {
+                section.innerHTML = '<div class="empty-state">No files or folders here</div>';
+                return;
+            }
+            
+            let html = '';
+            
+            // Render folders với menu ba chấm
+            folders.forEach(folder => {
+                const escapedName = folder.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const fullPath = currentPath ? currentPath + '/' + folder : folder;
+                
+                html += '<div class="file-item" style="background: #f9f9f9;">';
+                html += '<div style="font-size: 32px; line-height: 1;">📁</div>';
+                html += '<div class="file-info" onclick="navigateToFolder(\'' + fullPath.replace(/'/g, "\\'") + '\')" style="cursor: pointer;">';
+                html += '<div class="file-name" style="font-weight: 600;">' + escapeHtml(folder);
+                html += '<span class="file-type-badge" style="background:#e3f2fd;color:#1976d2">FOLDER</span>';
+                html += '</div>';
+                html += '<div class="file-meta" style="color: #999;">Click to open</div>';
+                html += '</div>';
+                
+                if (isAuthenticated) {
+                    html += '<div class="file-actions">';
+                    html += '<button class="menu-btn" onclick="toggleContextMenu(event, \'folder-' + escapedName + '\'); return false;">⋮</button>';
+                    
+                    html += '<div class="context-menu" id="menu-folder-' + escapedName + '">';
+                    html += '<div class="context-menu-item danger" onclick="deleteFolder(\'' + escapedName + '\')">Delete Folder</div>';
+                    html += '</div>';
+                    
+                    html += '</div>';
+                }
+                html += '</div>';
+            });
+            
+            // Render files
+            files.forEach(f => {
+                const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
+                const rawUrl = window.location.origin + '/raw/' + encodeURIComponent(fullFileName);
+                const escapedName = fullFileName.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                
+                let typeBadge = f.type || 'file';
+                let badgeStyle = '';
+
+                switch(f.type) {
+                    case 'text':
+                        badgeStyle = 'background:#e8f5e9;color:#2e7d32';
+                        break;
+                    case 'image':
+                        badgeStyle = 'background:#e3f2fd;color:#1976d2';
+                        break;
+                    case 'video':
+                        badgeStyle = 'background:#fce4ec;color:#c2185b';
+                        break;
+                    case 'audio':
+                        badgeStyle = 'background:#f3e5f5;color:#7b1fa2';
+                        break;
+                    case 'archive':
+                        badgeStyle = 'background:#fff3e0;color:#f57c00';
+                        break;
+                    case 'document':
+                        badgeStyle = 'background:#ffebee;color:#d32f2f';
+                        break;
+                    case 'font':
+                        badgeStyle = 'background:#e0f2f1;color:#00695c';
+                        break;
+                    case '3d-model':
+                        badgeStyle = 'background:#fce4ec;color:#880e4f';
+                        break;
+                    case 'certificate':
+                        badgeStyle = 'background:#fff9c4;color:#f57f17';
+                        break;
+                    case 'database':
+                        badgeStyle = 'background:#e1f5fe;color:#0277bd';
+                        break;
+                    case 'backup':
+                        badgeStyle = 'background:#efebe9;color:#5d4037';
+                        break;
+                    default:
+                        badgeStyle = 'background:#f5f5f5;color:#616161';
+                }
+                
+                const modDate = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
+                const fileSize = f.size || 0;
+                const isPublic = f.is_public || false;
+                
+                html += '<div class="file-item">';
+                html += '<input type="checkbox" class="checkbox file-checkbox" onchange="toggleFileSelect(\'' + escapedName + '\', this)">';
+                html += '<div class="file-info">';
+                html += '<div class="file-name">' + escapeHtml(f.name);
+                html += '<span class="file-type-badge" style="' + badgeStyle + '">' + typeBadge + '</span>';
+                
+                // Toggle switch cho Public/Private
+                if (isAuthenticated) {
+                    html += '<label class="toggle-switch" style="margin-left: 8px; vertical-align: middle;" onclick="event.stopPropagation();">';
+                    html += '<input type="checkbox" ' + (isPublic ? 'checked' : '') + ' onchange="togglePublicAccessSwitch(\'' + escapedName + '\', this.checked)">';
+                    html += '<span class="toggle-slider"></span>';
+                    html += '</label>';
+                } else {
+                    if (isPublic) {
+                        html += '<span class="file-type-badge" style="background:#4caf50;color:white;margin-left:4px">PUBLIC</span>';
+                    } else {
+                        html += '<span class="file-type-badge" style="background:#f44336;color:white;margin-left:4px">PRIVATE</span>';
+                    }
+                }
+                
+                html += '</div>';
+                html += '<div class="file-meta">' + formatFileSize(fileSize) + ' • ' + modDate;
+                if (f.download_count > 0) {
+                    html += ' • ' + f.download_count + ' downloads';
+                }
+                html += '</div>';
+                html += '<div class="file-link" onclick="copyLink(\'' + escapedName + '\')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
+                html += '</div>';
+                
+                html += '<div class="file-actions">';
+                html += '<button class="menu-btn" onclick="toggleContextMenu(event, \'' + escapedName + '\'); return false;">⋮</button>';
+                
+                html += '<div class="context-menu" id="menu-' + escapedName + '">';
+
+                if (f.type === 'text') {
+                    html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'text\')">View</div>';
+                    if (isAuthenticated) {
+                        html += '<div class="context-menu-item" onclick="editFile(\'' + escapedName + '\')">Edit</div>';
+                    }
+                } else if (f.type === 'image') {
+                    html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'image\')">View</div>';
+                } else if (f.type === 'video') {
+                    html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'video\')">Play</div>';
+                } else if (f.type === 'audio') {
+                    html += '<div class="context-menu-item" onclick="viewFile(\'' + escapedName + '\', \'audio\')">Play</div>';
+                } else if (f.type === 'archive') {
+                    html += '<div class="context-menu-item" onclick="viewZipContents(\'' + escapedName + '\')">View contents</div>';
+                }
+
+                html += '<div class="context-menu-item" onclick="downloadFile(\'' + escapedName + '\')">Download</div>';
+                html += '<div class="context-menu-item" onclick="copyLink(\'' + escapedName + '\')">Copy link</div>';
+                html += '<div class="context-menu-item" onclick="downloadAsZip(\'' + escapedName + '\')">Download as ZIP</div>';
+
+                if (isAuthenticated) {
+                    html += '<div class="context-menu-item" onclick="renameFile(\'' + escapedName + '\')">Rename</div>';
+                    html += '<div class="context-menu-item" onclick="duplicateFile(\'' + escapedName + '\')">Duplicate</div>';
+                    html += '<div class="context-menu-item danger" onclick="deleteFile(\'' + escapedName + '\')">Delete</div>';
+                }
+
+                html += '</div>';
+                html += '</div>';
+                html += '</div>';
+            });
+            
+            section.innerHTML = html;
+        })
+        .catch(err => {
+            console.error('Load error:', err);
+            document.getElementById('filesSection').innerHTML = '<div class="empty-state">Error loading files. Please refresh the page.</div>';
+        });
+}
+        
 
         function downloadAsZip(filename) {
             fetch('/zip-multiple', {
@@ -2045,18 +2957,19 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 uploadBtn.textContent = 'Upload';
             });
 
-            xhr.open('POST', '/upload');
+            const uploadUrl = currentPath ? '/upload?path=' + encodeURIComponent(currentPath) : '/upload';
+            xhr.open('POST', uploadUrl);
             xhr.send(formData);
         }
 
         function viewFile(filename, type) {
-            const url = '/raw/' + encodeURIComponent(filename);
+            const url = addTokenToURL('/raw/' + encodeURIComponent(filename));
             const viewBody = document.getElementById('viewBody');
             
             document.getElementById('viewTitle').textContent = filename;
             
             if (type === 'text') {
-                fetch('/view/' + encodeURIComponent(filename))
+                fetch(addTokenToURL('/view/' + encodeURIComponent(filename)))
                     .then(r => r.text())
                     .then(content => {
                         viewBody.innerHTML = '<pre id="viewContent"></pre>';
@@ -2068,7 +2981,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 document.getElementById('viewModal').style.display = 'block';
                 setupImageZoom();
             } else if (type === 'video') {
-                const streamUrl = '/stream/' + encodeURIComponent(filename);
+                const streamUrl = addTokenToURL('/stream/' + encodeURIComponent(filename));
                 viewBody.innerHTML = '<div class="media-viewer" style="background: #000;"><video controls autoplay playsinline webkit-playsinline style="width: 100%; max-height: 70vh;"><source src="' + streamUrl + '" type="video/mp4">Your browser does not support video playback.</video></div>';
                 document.getElementById('viewModal').style.display = 'block';
             } else if (type === 'audio') {
@@ -2076,7 +2989,6 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
                 document.getElementById('viewModal').style.display = 'block';
             }
         }
-
         function setupImageZoom() {
             const viewer = document.getElementById('imageViewer');
             const inner = document.getElementById('imageInner');
@@ -2217,19 +3129,24 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         }
 
         function editFile(filename) {
-            if (!isAuthenticated) {
-                showToast('Please login to edit files', 'error');
-                return;
-            }
-            currentEditFile = filename;
-            fetch('/edit/' + encodeURIComponent(filename))
-                .then(r => r.text())
-                .then(content => {
-                    document.getElementById('editTitle').textContent = filename;
-                    document.getElementById('editContent').value = content;
-                    document.getElementById('editModal').style.display = 'block';
-                });
-        }
+    if (!isAuthenticated) {
+        showToast('Please login to edit files', 'error');
+        return;
+    }
+    currentEditFile = filename;
+    fetch(addTokenToURL('/edit/' + encodeURIComponent(filename)))
+        .then(r => r.text())
+        .then(content => {
+            document.getElementById('editTitle').textContent = filename;
+            document.getElementById('editContent').value = content;
+            document.getElementById('editModal').style.display = 'block';
+        });
+}
+
+function downloadFile(filename) {
+    const url = addTokenToURL('/download/' + encodeURIComponent(filename));
+    window.location.href = url;
+}
 
         function saveFile() {
             const content = document.getElementById('editContent').value;
@@ -2295,92 +3212,150 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-stats.mu.Lock()
-stats.TotalRequests++
-stats.mu.Unlock()
-if r.Method != "POST" {
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	return
-}
-
-r.ParseMultipartForm(0)
-
-files := r.MultipartForm.File["files"]
-if len(files) == 0 {
-	http.Error(w, "No files uploaded", http.StatusBadRequest)
-	return
-}
-
-uploadedCount := 0
-for _, fileHeader := range files {
-	file, err := fileHeader.Open()
-	if err != nil {
-		continue
-	}
-	defer file.Close()
-
-	dst, err := os.Create(filepath.Join(publicDir, fileHeader.Filename))
-	if err != nil {
-		continue
-	}
-	defer dst.Close()
-
-	written, err := io.Copy(dst, file)
-	if err != nil {
-		continue
+	stats.mu.Lock()
+	stats.TotalRequests++
+	stats.mu.Unlock()
+	
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	uploadedCount++
-	if debug {
-		log.Printf("Uploaded: %s (%d bytes)", fileHeader.Filename, written)
+	r.ParseMultipartForm(0)
+	
+	// Get current path from query parameter
+	currentPath := r.URL.Query().Get("path")
+	if strings.Contains(currentPath, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
 	}
-}
 
-updateStats()
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		http.Error(w, "No files uploaded", http.StatusBadRequest)
+		return
+	}
 
-w.WriteHeader(http.StatusOK)
-w.Write([]byte(fmt.Sprintf("%d file(s) uploaded", uploadedCount)))
+	uploadedCount := 0
+	for _, fileHeader := range files {
+		file, err := fileHeader.Open()
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+
+		// Create file in the current path
+		targetPath := filepath.Join(publicDir, currentPath, fileHeader.Filename)
+		dst, err := os.Create(targetPath)
+		if err != nil {
+			continue
+		}
+		defer dst.Close()
+
+		written, err := io.Copy(dst, file)
+		if err != nil {
+			continue
+		}
+
+		uploadedCount++
+		if debug {
+			log.Printf("Uploaded: %s (%d bytes)", targetPath, written)
+		}
+	}
+
+	updateStats()
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf("%d file(s) uploaded", uploadedCount)))
 }
 
 func handleListFiles(w http.ResponseWriter, r *http.Request) {
-files, err := os.ReadDir(publicDir)
-if err != nil {
-http.Error(w, "Error reading directory", http.StatusInternalServerError)
-return
-}
-var fileList []FileMetadata
-for _, file := range files {
-	if !file.IsDir() {
-		info, _ := file.Info()
-		downloadMu.RLock()
-		count := downloadCounts[file.Name()]
-		downloadMu.RUnlock()
-		
-		fileList = append(fileList, FileMetadata{
-			Name:          file.Name(),
-			Type:          getFileType(file.Name()),
-			Size:          info.Size(),
-			ModTime:       info.ModTime(),
-			DownloadCount: count,
-		})
+	path := r.URL.Query().Get("path")
+	dirPath := filepath.Join(publicDir, path)
+	
+	if strings.Contains(path, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
 	}
-}
+	isAuth := false
+	cookie, err := r.Cookie("session")
+	if err == nil {
+		sessionMu.RLock()
+		expiry, exists := sessions[cookie.Value]
+		sessionMu.RUnlock()
+		if exists && time.Now().Before(expiry) {
+			isAuth = true
+		}
+	}
+	
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		http.Error(w, "Error reading directory", http.StatusInternalServerError)
+		return
+	}
+	
+	type FileMetadataWithPermission struct {
+		FileMetadata
+		IsPublic bool `json:"is_public"`
+	}
+	
+	var fileList []FileMetadataWithPermission
+	var folders []string
+	
+	for _, file := range files {
+		if file.IsDir() {
+			folders = append(folders, file.Name())
+		} else {
+			info, _ := file.Info()
+			fullPath := filepath.Join(path, file.Name())
+			permissionMu.RLock()
+			perm, exists := filePermissions[fullPath]
+			isPublic := exists && perm.IsPublic
+			permissionMu.RUnlock()
+			if !isPublic && !isAuth {
+				continue
+			}
+			
+			downloadMu.RLock()
+			count := downloadCounts[fullPath]
+			downloadMu.RUnlock()
+			
+			fileList = append(fileList, FileMetadataWithPermission{
+				FileMetadata: FileMetadata{
+					Name:          file.Name(),
+					Type:          getFileType(file.Name()),
+					Size:          info.Size(),
+					ModTime:       info.ModTime(),
+					DownloadCount: count,
+				},
+				IsPublic: isPublic,
+			})
+		}
+	}
 
-w.Header().Set("Content-Type", "application/json")
-json.NewEncoder(w).Encode(fileList)
+	response := map[string]interface{}{
+		"files":   fileList,
+		"folders": folders,
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func handleView(w http.ResponseWriter, r *http.Request) {
-filename := r.URL.Path[len("/view/"):]
-filePath := filepath.Join(publicDir, filename)
-content, err := os.ReadFile(filePath)
-if err != nil {
-	http.Error(w, "Error reading file", http.StatusInternalServerError)
-	return
-}
+	filename := r.URL.Path[len("/view/"):]
+	filePath := filepath.Join(publicDir, filename)
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		renderErrorPage(w, http.StatusNotFound,
+			"File Not Found",
+			"The file you're trying to view doesn't exist.",
+			"File: " + filename)
+		return
+	}
 
-w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-w.Write(content)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(content)
 }
 func handleEdit(w http.ResponseWriter, r *http.Request) {
 filename := r.URL.Path[len("/edit/"):]
@@ -2426,7 +3401,10 @@ filename := r.URL.Path[len("/raw/"):]
 filePath := filepath.Join(publicDir, filename)
 content, err := os.ReadFile(filePath)
 if err != nil {
-	http.Error(w, "File not found", http.StatusNotFound)
+	renderErrorPage(w, http.StatusNotFound, 
+        "File Not Found", 
+        "The file you're looking for doesn't exist.",
+        "Path: " + r.URL.Path)
 	return
 }
 
@@ -2707,4 +3685,134 @@ response := map[string]interface{}{
 
 w.Header().Set("Content-Type", "application/json")
 json.NewEncoder(w).Encode(response)
+}
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "favicon.ico")
+}
+func renderErrorPage(w http.ResponseWriter, statusCode int, title, message, details string) {
+	w.WriteHeader(statusCode)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	
+	html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <title>` + fmt.Sprintf("%d", statusCode) + ` - ` + title + `</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #000;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .error-container {
+            max-width: 600px;
+            text-align: center;
+        }
+        .error-code {
+            font-size: 120px;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .error-title {
+            font-size: 32px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+        .error-message {
+            font-size: 18px;
+            color: #999;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        .error-details {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 32px;
+            text-align: left;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            color: #ff6b6b;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .error-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 12px 24px;
+            background: #fff;
+            color: #000;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 14px;
+            transition: all 0.2s;
+            border: 2px solid #fff;
+        }
+        .btn:hover {
+            background: transparent;
+            color: #fff;
+        }
+        .btn-secondary {
+            background: transparent;
+            color: #fff;
+            border: 2px solid #333;
+        }
+        .btn-secondary:hover {
+            border-color: #666;
+            background: #1a1a1a;
+        }
+        @media (max-width: 768px) {
+            .error-code {
+                font-size: 80px;
+            }
+            .error-title {
+                font-size: 24px;
+            }
+            .error-message {
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-code">` + fmt.Sprintf("%d", statusCode) + `</div>
+        <h1 class="error-title">` + title + `</h1>
+        <p class="error-message">` + message + `</p>
+        ` + func() string {
+			if details != "" {
+				return `<div class="error-details">` + details + `</div>`
+			}
+			return ""
+		}() + `
+        <div class="error-actions">
+            <a href="/" class="btn">Go Home</a>
+            <a href="javascript:history.back()" class="btn btn-secondary">Go Back</a>
+        </div>
+    </div>
+</body>
+</html>`
+	
+	w.Write([]byte(html))
 }
