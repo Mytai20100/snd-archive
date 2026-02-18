@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func HandleUpload(w http.ResponseWriter, r *http.Request) {
