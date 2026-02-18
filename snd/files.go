@@ -87,6 +87,17 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 
 	for _, file := range files {
 		if file.IsDir() {
+			folderKey := file.Name()
+			if path != "" {
+				folderKey = filepath.Join(path, file.Name())
+			}
+			PermissionMu.RLock()
+			folderPerm, folderExists := FolderPermissions[folderKey]
+			folderIsPublic := folderExists && folderPerm.IsPublic
+			PermissionMu.RUnlock()
+			if !folderIsPublic && !isAuth {
+				continue
+			}
 			folders = append(folders, file.Name())
 		} else {
 			info, _ := file.Info()
