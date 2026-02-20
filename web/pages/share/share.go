@@ -14,6 +14,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <title>Public Files - ` + snd.Cfg.SiteName + `</title>
+    <script src="https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -48,7 +49,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             display: inline-block;
         }
         .btn:hover { background: #333; }
-
         .search-bar {
             padding: 16px 20px;
             border-bottom: 1px solid #e0e0e0;
@@ -63,7 +63,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border-radius: 4px;
         }
         .search-bar input:focus { border-color: #1a1a1a; }
-
         .files-section { padding: 20px; }
         .file-item {
             display: grid;
@@ -116,15 +115,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             white-space: nowrap;
         }
         .action-btn:hover { background: #fafafa; border-color: #1a1a1a; }
-
-        .empty-state {
-            text-align: center;
-            padding: 80px 20px;
-            color: #999;
-        }
+        .empty-state { text-align: center; padding: 80px 20px; color: #999; }
         .empty-state .title { font-size: 18px; margin-bottom: 8px; color: #555; }
         .empty-state .subtitle { font-size: 14px; }
-
         .stats-bar {
             padding: 12px 20px;
             background: #f5f5f5;
@@ -135,7 +128,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             gap: 24px;
         }
         .stats-bar strong { color: #1a1a1a; }
-
         .footer {
             position: fixed;
             bottom: 0; left: 0; right: 0;
@@ -148,7 +140,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             z-index: 100;
         }
         .footer strong { color: #1a1a1a; font-weight: 500; }
-
         .toast {
             position: fixed;
             top: 20px; right: 20px;
@@ -163,6 +154,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .toast.success { background: #2e7d32; }
         @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
+        /* modal for image / text / audio */
         .modal {
             display: none;
             position: fixed;
@@ -207,7 +199,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border-radius: 4px;
         }
         .media-viewer img { max-width: 100%; max-height: 65vh; object-fit: contain; }
-        .media-viewer video, .media-viewer audio { max-width: 100%; outline: none; }
+
+        /* csa overrides: no bar, orange accent */
+        .csa-bar { display: none !important; }
+        .csa-progress-fill { background: #e07820 !important; }
+        .csa-progress-thumb { background: #e07820 !important; box-shadow: 0 0 10px rgba(224,120,32,.5) !important; }
+        .csa-vol-slider::-webkit-slider-thumb { background: #e07820 !important; }
+        .csa-btn:hover { color: #ffaa55 !important; }
+        .csa-btn.csa-active { color: #e07820 !important; }
+        .csa-ldr-ring { border-top-color: #e07820 !important; }
 
         @media (max-width: 768px) {
             .file-item { grid-template-columns: 1fr; }
@@ -237,13 +237,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
 
         <div class="files-section" id="filesSection">
-            <div class="empty-state">
-                <div class="title">Loading...</div>
-            </div>
+            <div class="empty-state"><div class="title">Loading...</div></div>
         </div>
     </div>
 
-    <!-- View Modal -->
+    <!-- modal: image / text / audio -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -347,31 +345,51 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         }
 
         function viewFile(filename, type) {
-            const url = '/raw/' + encodeURIComponent(filename);
+            const rawUrl = '/raw/' + encodeURIComponent(filename);
             const viewBody = document.getElementById('viewBody');
             document.getElementById('viewTitle').textContent = filename;
 
+            if (type === 'video') {
+                // use csa.js — opens its own modal overlay
+                csa.player({
+                    src: '/stream/' + encodeURIComponent(filename),
+                    title: filename,
+                    mode: 'modal',
+                    autoplay: true,
+                    loader: 'ring',
+                    theme: { accent: '#e07820', accent2: '#ffaa55' }
+                });
+                return;
+            }
+
+            if (type === 'audio') {
+                csa.player({
+                    src: rawUrl,
+                    title: filename,
+                    mode: 'modal',
+                    autoplay: true,
+                    loader: 'ring',
+                    theme: { accent: '#e07820', accent2: '#ffaa55' }
+                });
+                return;
+            }
+
             if (type === 'text') {
-                fetch(url).then(r => r.text()).then(c => {
+                fetch(rawUrl).then(r => r.text()).then(c => {
                     viewBody.innerHTML = '<pre style="background:#fafafa;padding:16px;border-radius:4px;border:1px solid #e0e0e0;font-family:monospace;font-size:13px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(c) + '</pre>';
                     document.getElementById('viewModal').style.display = 'block';
                 });
-            } else if (type === 'image') {
-                viewBody.innerHTML = '<div class="media-viewer"><img src="' + url + '" alt="' + escapeHtml(filename) + '"></div>';
-                document.getElementById('viewModal').style.display = 'block';
-            } else if (type === 'video') {
-                viewBody.innerHTML = '<div class="media-viewer"><video controls autoplay playsinline style="width:100%;max-height:70vh;"><source src="/stream/' + encodeURIComponent(filename) + '">Video playback not supported.</video></div>';
-                document.getElementById('viewModal').style.display = 'block';
-            } else if (type === 'audio') {
-                viewBody.innerHTML = '<div class="media-viewer" style="background:#fff;"><audio controls autoplay style="width:100%;"><source src="' + url + '"></audio></div>';
+                return;
+            }
+
+            if (type === 'image') {
+                viewBody.innerHTML = '<div class="media-viewer"><img src="' + rawUrl + '" alt="' + escapeHtml(filename) + '"></div>';
                 document.getElementById('viewModal').style.display = 'block';
             }
         }
 
         function closeModal() {
             document.getElementById('viewModal').style.display = 'none';
-            document.querySelectorAll('video').forEach(v => v.pause());
-            document.querySelectorAll('audio').forEach(a => a.pause());
         }
         window.onclick = function(e) { if (e.target.classList.contains('modal')) closeModal(); };
 
@@ -393,7 +411,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1048576) return (bytes/1024).toFixed(2) + ' KB';
             if (bytes < 1073741824) return (bytes/1048576).toFixed(2) + ' MB';
-            return (bytes/1073741824).toFixed(2) + ' GB';
+            if (bytes < 1099511627776) return (bytes/1073741824).toFixed(2) + ' GB';
+            if (bytes < 1125899906842624) return (bytes/1099511627776).toFixed(2) + ' TB';
+            return (bytes/1125899906842624).toFixed(2) + ' PB';
         }
 
         loadPublicFiles();

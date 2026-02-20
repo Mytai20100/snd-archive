@@ -51,6 +51,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>` + snd.Cfg.SiteName + `</title>
+    <script src="https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -86,7 +87,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             white-space: nowrap;
         }
         .btn:hover { background: #333; }
-
         .upload-section {
             padding: 24px 20px;
             border-bottom: 1px solid #e0e0e0;
@@ -131,7 +131,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         }
         .upload-btn:hover { background: #333; }
         .upload-btn:disabled { background: #ccc; cursor: not-allowed; }
-
         .progress-section {
             padding: 20px;
             display: none;
@@ -141,7 +140,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .progress-bar { width: 100%; height: 4px; background: #e0e0e0; }
         .progress-fill { height: 100%; background: #1a1a1a; width: 0%; transition: width 0.3s; }
         .progress-info { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; color: #666; }
-
         .bulk-actions {
             display: none;
             padding: 14px 20px;
@@ -152,7 +150,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             flex-wrap: wrap;
         }
         .bulk-actions.active { display: flex; }
-
         .files-section { padding: 20px; }
         .file-item {
             display: grid;
@@ -186,7 +183,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .file-link { font-size: 11px; color: #0066cc; margin-top: 4px; font-family: monospace; word-break: break-all; cursor: pointer; }
         .file-link:hover { text-decoration: underline; }
         .file-actions { display: flex; gap: 8px; flex-shrink: 0; position: relative; }
-
         .menu-btn {
             padding: 6px 12px;
             background: white;
@@ -198,7 +194,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             height: 36px;
         }
         .menu-btn:hover { background: #fafafa; border-color: #1a1a1a; }
-
         .context-menu {
             display: none;
             position: absolute;
@@ -223,7 +218,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .context-menu-item:hover { background: #fafafa; }
         .context-menu-item.danger { color: #d32f2f; }
         .context-menu-item.danger:hover { background: #ffebee; }
-
         .btn-small {
             padding: 7px 14px;
             border: 1px solid #d0d0d0;
@@ -235,11 +229,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             white-space: nowrap;
         }
         .btn-small:hover { background: #fafafa; border-color: #1a1a1a; }
-
         .checkbox { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
-
         .empty-state { text-align: center; padding: 60px 20px; color: #999; font-size: 14px; }
-
         .modal {
             display: none;
             position: fixed;
@@ -290,7 +281,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             flex-shrink: 0;
         }
         .close-btn:hover { color: #1a1a1a; }
-
         textarea {
             width: 100%;
             min-height: 300px;
@@ -303,7 +293,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             line-height: 1.6;
         }
         textarea:focus { border-color: #1a1a1a; outline: none; }
-
         pre {
             background: #fafafa;
             padding: 16px;
@@ -316,7 +305,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border: 1px solid #e0e0e0;
             border-radius: 4px;
         }
-
         .media-viewer {
             text-align: center;
             background: #000;
@@ -346,7 +334,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .media-viewer.zoomed { cursor: grab; justify-content: flex-start; align-items: flex-start; }
         .media-viewer.zoomed:active { cursor: grabbing; }
         .media-viewer.zoomed img { cursor: zoom-out; max-width: none; max-height: none; }
-        .media-viewer video, .media-viewer audio { max-width: 100%; outline: none; }
         .zoom-hint {
             position: absolute;
             bottom: 20px;
@@ -360,7 +347,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             pointer-events: none;
             white-space: nowrap;
         }
-
         .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
         .toggle-switch input { opacity: 0; width: 0; height: 0; }
         .toggle-slider {
@@ -384,7 +370,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         input:checked + .toggle-slider:before { transform: translateX(20px); }
         .toggle-slider:after { content: 'Private'; position: absolute; right: 8px; top: 4px; font-size: 9px; color: white; font-weight: 500; }
         input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto; }
-
         .footer {
             position: fixed;
             bottom: 0; left: 0; right: 0;
@@ -397,7 +382,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             z-index: 100;
         }
         .footer strong { color: #1a1a1a; font-weight: 500; }
-
         .toast {
             position: fixed;
             top: 20px; right: 20px;
@@ -413,7 +397,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .toast.success { background: #2e7d32; }
         .toast.error { background: #d32f2f; }
         @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-
         .search-overlay {
             display: none;
             position: fixed;
@@ -448,13 +431,21 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .search-item:hover { background: #fafafa; }
         .search-hint { font-size: 12px; color: #666; margin-top: 8px; text-align: center; }
         .search-highlight { background: #fff9c4 !important; outline: 2px solid #f9a825; }
-
         .zip-entry { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-family: monospace; font-size: 12px; }
         .props-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         .props-table td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
         .props-table td:first-child { color: #666; width: 38%; white-space: nowrap; }
         .props-table tr:last-child td { border-bottom: none; }
         .zip-entry:last-child { border-bottom: none; }
+
+        /* csa overrides: no bar, orange accent */
+        .csa-bar { display: none !important; }
+        .csa-progress-fill { background: #e07820 !important; }
+        .csa-progress-thumb { background: #e07820 !important; box-shadow: 0 0 10px rgba(224,120,32,.5) !important; }
+        .csa-vol-slider::-webkit-slider-thumb { background: #e07820 !important; }
+        .csa-btn:hover { color: #ffaa55 !important; }
+        .csa-btn.csa-active { color: #e07820 !important; }
+        .csa-ldr-ring { border-top-color: #e07820 !important; }
 
         @media (max-width: 768px) {
             .keyboard-hint { display: none; }
@@ -516,7 +507,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- View Modal -->
+    <!-- View Modal (image / text / zip / archive) -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -692,7 +683,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             document.getElementById('searchOverlay').style.display = 'none';
             document.getElementById('searchInput').value = '';
             document.getElementById('searchResults').innerHTML = '';
-            // scroll to and highlight item
             const id = 'snd-item-' + name.replace(/[^a-zA-Z0-9]/g, '_');
             const el = document.getElementById(id);
             if (el) {
@@ -885,7 +875,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         }
                         html += '</div>';
                     });
-                    // load folder public states async
+
                     if (isAuthenticated) {
                         folders.forEach(folder => {
                             const fullPath = currentPath ? currentPath + '/' + folder : folder;
@@ -905,13 +895,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         const modDate = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
 
                         const badgeStyles = {
-                            text:   'background:#e8f5e9;color:#2e7d32',
-                            image:  'background:#e3f2fd;color:#1976d2',
-                            video:  'background:#fce4ec;color:#c2185b',
-                            audio:  'background:#f3e5f5;color:#7b1fa2',
-                            archive:'background:#fff3e0;color:#f57c00',
+                            text:    'background:#e8f5e9;color:#2e7d32',
+                            image:   'background:#e3f2fd;color:#1976d2',
+                            video:   'background:#fce4ec;color:#c2185b',
+                            audio:   'background:#f3e5f5;color:#7b1fa2',
+                            archive: 'background:#fff3e0;color:#f57c00',
                             document:'background:#ffebee;color:#d32f2f',
-                            font:   'background:#e0f2f1;color:#00695c',
+                            font:    'background:#e0f2f1;color:#00695c',
                             database:'background:#e1f5fe;color:#0277bd',
                         };
                         const badgeStyle = badgeStyles[f.type] || 'background:#f5f5f5;color:#616161';
@@ -942,17 +932,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         html += '<button class="menu-btn" onclick="toggleContextMenu(event,\'' + esc + '\');return false;">&#8942;</button>';
                         html += '<div class="context-menu" id="menu-' + esc + '">';
 
-                        // View available for all file types
                         const viewLabel = (f.type === 'video' || f.type === 'audio') ? 'Play' : 'View';
                         html += '<div class="context-menu-item" onclick="viewFile(\'' + esc + '\',\'' + f.type + '\')">'+viewLabel+'</div>';
                         if (isAuthenticated) {
                             html += '<div class="context-menu-item" onclick="editFile(\'' + esc + '\')">Edit</div>';
                         }
-
                         html += '<div class="context-menu-item" onclick="downloadFile(\'' + esc + '\')">Download</div>';
                         html += '<div class="context-menu-item" onclick="copyLink(\'' + esc + '\')">Copy link</div>';
                         html += '<div class="context-menu-item" onclick="downloadAsZip(\'' + esc + '\')">Download as ZIP</div>';
-
                         if (isAuthenticated) {
                             html += '<div class="context-menu-item" onclick="renameFile(\'' + esc + '\')">Rename</div>';
                             html += '<div class="context-menu-item" onclick="duplicateFile(\'' + esc + '\')">Duplicate</div>';
@@ -992,29 +979,55 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             const rawUrl = addTokenToURL('/raw/' + encodeURIComponent(filename));
             const viewBody = document.getElementById('viewBody');
             document.getElementById('viewTitle').textContent = filename.split('/').pop();
+
+            // video & audio: delegate to csa.js
+            if (type === 'video') {
+                const streamUrl = addTokenToURL('/stream/' + encodeURIComponent(filename));
+                csa.player({
+                    src: streamUrl,
+                    title: filename.split('/').pop(),
+                    mode: 'modal',
+                    autoplay: true,
+                    loader: 'ring',
+                    theme: { accent: '#e07820', accent2: '#ffaa55' }
+                });
+                return;
+            }
+
+            if (type === 'audio') {
+                csa.player({
+                    src: rawUrl,
+                    title: filename.split('/').pop(),
+                    mode: 'modal',
+                    autoplay: true,
+                    loader: 'ring',
+                    theme: { accent: '#e07820', accent2: '#ffaa55' }
+                });
+                return;
+            }
+
             document.getElementById('viewModal').style.display = 'block';
+
             if (type === 'image') {
                 viewBody.innerHTML = '<div class="media-viewer" id="imageViewer"><div class="media-viewer-inner" id="imageInner"><img src="' + rawUrl + '" id="zoomableImage"></div><div class="zoom-hint" id="zoomHint">Click to zoom in</div></div>';
                 setupImageZoom();
-            } else if (type === 'video') {
-                const streamUrl = addTokenToURL('/stream/' + encodeURIComponent(filename));
-                viewBody.innerHTML = '<div class="media-viewer" style="background:#000;"><video controls autoplay playsinline style="width:100%;max-height:70vh;"><source src="' + streamUrl + '">Browser does not support video.</video></div>';
-            } else if (type === 'audio') {
-                viewBody.innerHTML = '<div class="media-viewer" style="background:#fff;padding:20px;"><audio controls autoplay style="width:100%;"><source src="' + rawUrl + '"></audio></div>';
-            } else if (type === 'archive') {
+                return;
+            }
+
+            if (type === 'archive') {
                 viewZipContents(filename);
                 return;
-            } else {
-                // text, document, binary, font, database, unknown — fetch raw and show as text
-                viewBody.innerHTML = '<div style="color:#999;padding:24px;text-align:center;">Loading...</div>';
-                fetch(rawUrl)
-                    .then(r => r.text())
-                    .then(c => {
-                        viewBody.innerHTML = '<pre id="viewContent" style="white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:12px;line-height:1.6;background:#f5f5f5;padding:16px;border-radius:4px;overflow:auto;max-height:62vh;"></pre>';
-                        document.getElementById('viewContent').textContent = c;
-                    })
-                    .catch(() => { viewBody.innerHTML = '<div style="padding:24px;color:#d32f2f;">Failed to load file.</div>'; });
             }
+
+            // text / document / binary / etc.
+            viewBody.innerHTML = '<div style="color:#999;padding:24px;text-align:center;">Loading...</div>';
+            fetch(rawUrl)
+                .then(r => r.text())
+                .then(c => {
+                    viewBody.innerHTML = '<pre id="viewContent" style="white-space:pre-wrap;word-break:break-all;font-family:monospace;font-size:12px;line-height:1.6;background:#f5f5f5;padding:16px;border-radius:4px;overflow:auto;max-height:62vh;"></pre>';
+                    document.getElementById('viewContent').textContent = c;
+                })
+                .catch(() => { viewBody.innerHTML = '<div style="padding:24px;color:#d32f2f;">Failed to load file.</div>'; });
         }
 
         function setupImageZoom() {
@@ -1056,7 +1069,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 });
                 html += '</div>';
                 document.getElementById('viewBody').innerHTML = html;
-                document.getElementById('viewModal').style.display = 'block';
             }).catch(() => showToast('Failed to read ZIP','error'));
         }
 
@@ -1223,8 +1235,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         // --- Modal & utilities ---
         function closeModal(id) {
             document.getElementById(id).style.display = 'none';
-            document.querySelectorAll('video').forEach(v => v.pause());
-            document.querySelectorAll('audio').forEach(a => a.pause());
         }
         window.onclick = function(e) {
             if (e.target.classList.contains('modal')) closeModal(e.target.id);
