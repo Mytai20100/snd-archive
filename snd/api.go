@@ -87,7 +87,6 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Check valid API token first
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			token = r.Header.Get("X-API-Token")
@@ -97,7 +96,6 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Check valid session
 		cookie, err := r.Cookie("session")
 		if err == nil {
 			SessionMu.RLock()
@@ -109,7 +107,6 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// Neither token nor session valid → error page
 		http.Redirect(w, r, "/error?code=401&path="+r.URL.Path, http.StatusSeeOther)
 	}
 }

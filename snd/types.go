@@ -21,6 +21,9 @@ type Config struct {
 	SFTPPort            string `yaml:"sftp_port"`
 	SFTPKeyPath         string `yaml:"sftp_key_path"`
 	CloudflareChallenge bool   `yaml:"cloudflare_challenge"`
+	EmbedTitle          string `yaml:"embed_title"`
+	EmbedDescription    string `yaml:"embed_description"`
+	EmbedImageURL       string `yaml:"embed_image_url"`
 }
 
 type FilePermission struct {

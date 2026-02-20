@@ -26,6 +26,9 @@ func LoadConfig() Config {
 		SFTPPort:            "2022",
 		SFTPKeyPath:         "sftp_key.pem",
 		CloudflareChallenge: false,
+		EmbedTitle:          "",
+		EmbedDescription:    "File sharing powered by servernotdie",
+		EmbedImageURL:       "",
 	}
 
 	data, err := os.ReadFile(ConfigFile)

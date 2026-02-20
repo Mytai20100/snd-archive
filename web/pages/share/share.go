@@ -7,6 +7,19 @@ import (
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
+	embedTitle := snd.Cfg.EmbedTitle
+	if embedTitle == "" {
+		embedTitle = "Public Files — " + snd.Cfg.SiteName
+	}
+	embedDesc := snd.Cfg.EmbedDescription
+	if embedDesc == "" {
+		embedDesc = "File sharing powered by " + snd.Cfg.SiteName
+	}
+	embedImage := snd.Cfg.EmbedImageURL
+	if embedImage == "" {
+		embedImage = snd.Cfg.IconURL
+	}
+
 	html := `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,7 +27,22 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <title>Public Files - ` + snd.Cfg.SiteName + `</title>
-    <script src="https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js"></script>
+    <meta property="og:title" content="` + embedTitle + `">
+    <meta property="og:description" content="` + embedDesc + `">
+    <meta property="og:image" content="` + embedImage + `">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="` + embedTitle + `">
+    <meta name="twitter:description" content="` + embedDesc + `">
+    <meta name="twitter:image" content="` + embedImage + `">
+    <script>
+        (function(){
+            var s=document.createElement('script');
+            s.src='https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js';
+            s.onerror=function(){var f=document.createElement('script');f.src='/lib/csa.js';document.head.appendChild(f);};
+            document.head.appendChild(s);
+        })();
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -199,7 +227,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border-radius: 4px;
         }
         .media-viewer img { max-width: 100%; max-height: 65vh; object-fit: contain; }
-
         /* csa overrides: no bar, orange accent */
         .csa-bar { display: none !important; }
         .csa-progress-fill { background: #e07820 !important; }
@@ -346,13 +373,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         function viewFile(filename, type) {
             const rawUrl = '/raw/' + encodeURIComponent(filename);
+            const streamUrl = '/stream/' + encodeURIComponent(filename);
             const viewBody = document.getElementById('viewBody');
             document.getElementById('viewTitle').textContent = filename;
 
             if (type === 'video') {
-                // use csa.js — opens its own modal overlay
                 csa.player({
-                    src: '/stream/' + encodeURIComponent(filename),
+                    src: streamUrl,
                     title: filename,
                     mode: 'modal',
                     autoplay: true,
@@ -364,7 +391,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
             if (type === 'audio') {
                 csa.player({
-                    src: rawUrl,
+                    src: streamUrl,
                     title: filename,
                     mode: 'modal',
                     autoplay: true,
@@ -408,12 +435,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         }
 
         function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
             if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1048576) return (bytes/1024).toFixed(2) + ' KB';
-            if (bytes < 1073741824) return (bytes/1048576).toFixed(2) + ' MB';
-            if (bytes < 1099511627776) return (bytes/1073741824).toFixed(2) + ' GB';
-            if (bytes < 1125899906842624) return (bytes/1099511627776).toFixed(2) + ' TB';
-            return (bytes/1125899906842624).toFixed(2) + ' PB';
+            const units = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+            let i = 0;
+            let size = bytes / 1024;
+            while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+            return size.toFixed(2) + ' ' + units[i];
         }
 
         loadPublicFiles();

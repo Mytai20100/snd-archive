@@ -51,7 +51,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>` + snd.Cfg.SiteName + `</title>
-    <script src="https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js"></script>
+    <script>
+        (function(){
+            var s=document.createElement('script');
+            s.src='https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@main/csa.js';
+            s.onerror=function(){var f=document.createElement('script');f.src='/lib/csa.js';document.head.appendChild(f);};
+            document.head.appendChild(s);
+        })();
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -771,12 +778,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             selectedFilesDiv.style.display = 'block';
         }
 
+        const CHUNK_SIZE = 4 * 1024 * 1024;
+
         function uploadFiles() {
-            if (!isAuthenticated) { showToast('Please login to upload files','error'); return; }
+            if (!isAuthenticated) { showToast('Please login to upload files', 'error'); return; }
             const files = fileInput.files;
-            if (!files.length) { showToast('Please select files','error'); return; }
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
+            if (!files.length) { showToast('Please select files', 'error'); return; }
 
             const progressSection = document.getElementById('progressSection');
             const progressFill = document.getElementById('progressFill');
@@ -787,45 +794,120 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             progressSection.style.display = 'block';
             uploadBtn.disabled = true;
             uploadBtn.textContent = 'Uploading...';
-            startTime = Date.now();
 
-            const xhr = new XMLHttpRequest();
-            xhr.upload.addEventListener('progress', function(e) {
-                if (!e.lengthComputable) return;
-                const pct = (e.loaded / e.total * 100).toFixed(1);
-                progressFill.style.width = pct + '%';
-                const elapsed = (Date.now() - startTime) / 1000;
-                const speed = elapsed > 0 ? (e.loaded / elapsed / 1024 / 1024).toFixed(2) : '0.00';
-                const remaining = e.total - e.loaded;
-                const eta = elapsed > 0 ? remaining / (e.loaded / elapsed) : 0;
-                const etaText = eta < 60 ? ' - ETA: ' + Math.floor(eta) + 's' : ' - ETA: ' + Math.floor(eta/60) + 'm ' + Math.floor(eta%60) + 's';
-                progressText.textContent = pct + '%' + etaText;
-                speedText.textContent = speed + ' MB/s - ' + Math.floor(elapsed) + 's elapsed';
-            });
-            xhr.addEventListener('load', function() {
-                if (xhr.status === 200) {
-                    showToast('Upload complete - ' + files.length + ' file(s)','success');
-                    fileInput.value = '';
-                    selectedFilesDiv.style.display = 'none';
-                    setTimeout(() => loadFiles(), 500);
-                } else {
-                    showToast('Upload failed: ' + xhr.statusText,'error');
+            const startTime = Date.now();
+            let totalBytes = 0;
+            let uploadedBytes = 0;
+            for (let f of files) totalBytes += f.size;
+
+            const uploadQueue = Array.from(files);
+            let fileIdx = 0;
+
+            function uploadNextFile() {
+                if (fileIdx >= uploadQueue.length) {
+                    finishUpload(uploadQueue.length);
+                    return;
                 }
+                const file = uploadQueue[fileIdx++];
+                uploadFileChunked(file, function(sent) {
+                    uploadedBytes += sent;
+                    const pct = totalBytes > 0 ? (uploadedBytes / totalBytes * 100).toFixed(1) : 100;
+                    progressFill.style.width = pct + '%';
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    const speed = elapsed > 0 ? (uploadedBytes / elapsed / 1024 / 1024).toFixed(2) : '0.00';
+                    const remaining = totalBytes - uploadedBytes;
+                    const eta = uploadedBytes > 0 ? (remaining / (uploadedBytes / elapsed)) : 0;
+                    const etaText = eta < 60 ? ' ETA: ' + Math.floor(eta) + 's' : ' ETA: ' + Math.floor(eta/60) + 'm ' + Math.floor(eta%60) + 's';
+                    progressText.textContent = pct + '% — ' + file.name;
+                    speedText.textContent = speed + ' MB/s' + etaText;
+                }, function() {
+                    uploadNextFile();
+                }, function(err) {
+                    showToast('Upload failed: ' + err + ' — ' + file.name, 'error');
+                    uploadNextFile();
+                });
+            }
+
+            uploadNextFile();
+
+            function finishUpload(count) {
+                showToast('Upload complete — ' + count + ' file(s)', 'success');
+                fileInput.value = '';
+                selectedFilesDiv.style.display = 'none';
                 progressSection.style.display = 'none';
                 progressFill.style.width = '0%';
                 uploadBtn.disabled = false;
                 uploadBtn.textContent = 'Upload';
-            });
-            xhr.addEventListener('error', function() {
-                showToast('Upload error: Network or server issue','error');
-                progressSection.style.display = 'none';
-                progressFill.style.width = '0%';
-                uploadBtn.disabled = false;
-                uploadBtn.textContent = 'Upload';
-            });
-            const uploadUrl = currentPath ? '/upload?path=' + encodeURIComponent(currentPath) : '/upload';
-            xhr.open('POST', uploadUrl);
-            xhr.send(formData);
+                setTimeout(() => loadFiles(), 500);
+            }
+        }
+
+        function uploadFileChunked(file, onProgress, onDone, onError) {
+            const path = currentPath;
+            const totalSize = file.size;
+            let offset = 0;
+            let bytesSentForProgress = 0;
+
+            function sendChunk(retries) {
+                if (retries === undefined) retries = 3;
+                const isFinal = (offset + CHUNK_SIZE) >= totalSize;
+                const chunk = file.slice(offset, offset + CHUNK_SIZE);
+                const chunkSize = chunk.size;
+
+                const params = new URLSearchParams({
+                    filename: file.name,
+                    offset: offset,
+                    total: totalSize,
+                    final: isFinal ? '1' : '0'
+                });
+                if (path) params.set('path', path);
+
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/upload-chunk?' + params.toString());
+
+                xhr.upload.addEventListener('progress', function(e) {
+                    if (e.lengthComputable) {
+                        const delta = e.loaded - bytesSentForProgress;
+                        if (delta > 0) { bytesSentForProgress = e.loaded; onProgress(delta); }
+                    }
+                });
+
+                xhr.addEventListener('load', function() {
+                    if (xhr.status === 200) {
+                        const delta = chunkSize - bytesSentForProgress;
+                        if (delta > 0) { onProgress(delta); }
+                        bytesSentForProgress = 0;
+                        offset += chunkSize;
+                        if (isFinal) {
+                            onDone();
+                        } else {
+                            setTimeout(sendChunk, 0);
+                        }
+                    } else {
+                        if (retries > 0) {
+                            setTimeout(() => sendChunk(retries - 1), 2000);
+                        } else {
+                            onError('Server error ' + xhr.status);
+                        }
+                    }
+                });
+
+                xhr.addEventListener('error', function() {
+                    if (retries > 0) {
+                        setTimeout(() => sendChunk(retries - 1), 3000);
+                    } else {
+                        onError('Network error');
+                    }
+                });
+
+                xhr.addEventListener('abort', function() {
+                    onError('Upload aborted');
+                });
+
+                xhr.send(chunk);
+            }
+
+            sendChunk();
         }
 
         // --- Load files ---
@@ -977,15 +1059,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         function viewFile(filename, type) {
             const rawUrl = addTokenToURL('/raw/' + encodeURIComponent(filename));
-            const viewBody = document.getElementById('viewBody');
-            document.getElementById('viewTitle').textContent = filename.split('/').pop();
+            const streamUrl = addTokenToURL('/stream/' + encodeURIComponent(filename));
+            const baseName = filename.split('/').pop();
 
-            // video & audio: delegate to csa.js
             if (type === 'video') {
-                const streamUrl = addTokenToURL('/stream/' + encodeURIComponent(filename));
                 csa.player({
                     src: streamUrl,
-                    title: filename.split('/').pop(),
+                    title: baseName,
                     mode: 'modal',
                     autoplay: true,
                     loader: 'ring',
@@ -996,8 +1076,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
             if (type === 'audio') {
                 csa.player({
-                    src: rawUrl,
-                    title: filename.split('/').pop(),
+                    src: streamUrl,
+                    title: baseName,
                     mode: 'modal',
                     autoplay: true,
                     loader: 'ring',
@@ -1006,6 +1086,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 return;
             }
 
+            const viewBody = document.getElementById('viewBody');
+            document.getElementById('viewTitle').textContent = baseName;
             document.getElementById('viewModal').style.display = 'block';
 
             if (type === 'image') {
@@ -1255,10 +1337,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         }
 
         function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
             if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1048576) return (bytes/1024).toFixed(2) + ' KB';
-            if (bytes < 1073741824) return (bytes/1048576).toFixed(2) + ' MB';
-            return (bytes/1073741824).toFixed(2) + ' GB';
+            const units = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+            let i = 0;
+            let size = bytes / 1024;
+            while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+            return size.toFixed(2) + ' ' + units[i];
         }
 
         loadFiles();

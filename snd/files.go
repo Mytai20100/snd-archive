@@ -7,6 +7,8 @@ import (
 	h "html"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,7 +25,6 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	r.ParseMultipartForm(0)
 
 	currentPath := r.URL.Query().Get("path")
 	if strings.Contains(currentPath, "..") {
@@ -31,39 +32,164 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files := r.MultipartForm.File["files"]
-	if len(files) == 0 {
-		http.Error(w, "No files uploaded", http.StatusBadRequest)
+	contentType := r.Header.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		http.Error(w, "Expected multipart/form-data", http.StatusBadRequest)
 		return
 	}
 
+	boundary := params["boundary"]
+	mr := multipart.NewReader(r.Body, boundary)
+
 	uploadedCount := 0
-	for _, fileHeader := range files {
-		file, err := fileHeader.Open()
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
+			if Debug {
+				log.Printf("[UPLOAD] multipart error: %v", err)
+			}
+			break
+		}
+
+		filename := part.FileName()
+		if filename == "" {
+			part.Close()
 			continue
 		}
-		defer file.Close()
 
-		targetPath := filepath.Join(PublicDir, currentPath, fileHeader.Filename)
+		filename = filepath.Base(filename)
+		if strings.Contains(filename, "..") || filename == "" || filename == "." {
+			part.Close()
+			continue
+		}
+
+		targetPath := filepath.Join(PublicDir, currentPath, filename)
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			part.Close()
+			continue
+		}
+
 		dst, err := os.Create(targetPath)
 		if err != nil {
+			part.Close()
+			if Debug {
+				log.Printf("[UPLOAD] create file error: %v", err)
+			}
 			continue
 		}
-		defer dst.Close()
 
-		written, err := io.Copy(dst, file)
+		written, err := io.Copy(dst, part)
+		dst.Close()
+		part.Close()
+
 		if err != nil {
+			os.Remove(targetPath)
+			if Debug {
+				log.Printf("[UPLOAD] copy error for %s: %v", filename, err)
+			}
 			continue
 		}
+
 		uploadedCount++
 		if Debug {
-			log.Printf("Uploaded: %s (%d bytes)", targetPath, written)
+			log.Printf("[UPLOAD] %s (%d bytes)", targetPath, written)
 		}
 	}
+
 	UpdateStats()
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("%d file(s) uploaded", uploadedCount)))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"uploaded": uploadedCount,
+		"message":  fmt.Sprintf("%d file(s) uploaded", uploadedCount),
+	})
+}
+
+func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	currentPath := r.URL.Query().Get("path")
+	filename := r.URL.Query().Get("filename")
+	offsetStr := r.URL.Query().Get("offset")
+	totalStr := r.URL.Query().Get("total")
+	final := r.URL.Query().Get("final") == "1"
+
+	if strings.Contains(currentPath, "..") || strings.Contains(filename, "..") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	filename = filepath.Base(filename)
+	if filename == "" || filename == "." {
+		http.Error(w, "Invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	offset, _ := strconv.ParseInt(offsetStr, 10, 64)
+	total, _ := strconv.ParseInt(totalStr, 10, 64)
+
+	targetPath := filepath.Join(PublicDir, currentPath, filename)
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		http.Error(w, "Cannot create directory", http.StatusInternalServerError)
+		return
+	}
+
+	tmpPath := targetPath + ".upload_tmp"
+
+	var flag int
+	if offset == 0 {
+		flag = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	} else {
+		flag = os.O_WRONLY | os.O_CREATE
+	}
+
+	f, err := os.OpenFile(tmpPath, flag, 0644)
+	if err != nil {
+		http.Error(w, "Cannot open file for writing", http.StatusInternalServerError)
+		return
+	}
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			http.Error(w, "Seek error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	written, err := io.Copy(f, r.Body)
+	f.Close()
+
+	if err != nil {
+		http.Error(w, "Write error", http.StatusInternalServerError)
+		return
+	}
+
+	if Debug {
+		log.Printf("[CHUNK] %s offset=%d written=%d total=%d final=%v", filename, offset, written, total, final)
+	}
+
+	if final {
+		if err := os.Rename(tmpPath, targetPath); err != nil {
+			http.Error(w, "Finalize error", http.StatusInternalServerError)
+			return
+		}
+		UpdateStats()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"written": written,
+		"offset":  offset,
+		"total":   total,
+		"done":    final,
+	})
 }
 
 func HandleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +300,11 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fileType == "video" || fileType == "audio" {
-		http.Redirect(w, r, "/stream/"+filename+"?token="+token, http.StatusSeeOther)
+		streamURL := "/stream/" + filename
+		if token != "" {
+			streamURL += "?token=" + token
+		}
+		http.Redirect(w, r, streamURL, http.StatusSeeOther)
 		return
 	}
 
@@ -201,11 +331,12 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
         </div>`
 	}
 
-	html := `<!DOCTYPE html>
+	viewHTML := `<!DOCTYPE html>
 <html>
 <head>
     <title>View: ` + filepath.Base(filename) + `</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fafafa; padding: 20px; }
@@ -217,7 +348,7 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
         .btn:hover { background: #333; }
         .viewer-content { padding: 20px; }
         .code-block { background: #f5f5f5; padding: 16px; border-radius: 4px; overflow-x: auto; font-family: 'Monaco', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
-        .file-info { display: flex; gap: 20px; padding: 12px; background: #f9f9f9; border-radius: 4px; margin-bottom: 20px; font-size: 13px; color: #666; }
+        .file-info { display: flex; gap: 20px; padding: 12px; background: #f9f9f9; border-radius: 4px; margin-bottom: 20px; font-size: 13px; color: #666; flex-wrap: wrap; }
         .binary-notice { text-align: center; padding: 40px; color: #666; }
     </style>
 </head>
@@ -243,7 +374,7 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	w.Write([]byte(viewHTML))
 }
 
 func HandleEdit(w http.ResponseWriter, r *http.Request) {
@@ -271,11 +402,12 @@ func HandleEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := r.URL.Query().Get("token")
-	html := `<!DOCTYPE html>
+	editHTML := `<!DOCTYPE html>
 <html>
 <head>
     <title>Edit: ` + filepath.Base(filename) + `</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, sans-serif; background: #fafafa; height: 100vh; display: flex; flex-direction: column; }
@@ -287,7 +419,7 @@ func HandleEdit(w http.ResponseWriter, r *http.Request) {
         .btn-primary { background: #2563eb; }
         .btn-primary:hover { background: #1d4ed8; }
         .editor-container { flex: 1; display: flex; flex-direction: column; background: white; margin: 20px; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
-        .editor-info { padding: 12px 20px; background: #f9f9f9; border-bottom: 1px solid #e0e0e0; font-size: 13px; color: #666; display: flex; gap: 20px; }
+        .editor-info { padding: 12px 20px; background: #f9f9f9; border-bottom: 1px solid #e0e0e0; font-size: 13px; color: #666; display: flex; gap: 20px; flex-wrap: wrap; }
         .editor-textarea { flex: 1; padding: 16px; border: none; font-family: 'Monaco', monospace; font-size: 13px; line-height: 1.6; resize: none; outline: none; }
         .save-status { display: none; padding: 8px 16px; background: #10b981; color: white; border-radius: 4px; font-size: 13px; }
         .save-status.error { background: #ef4444; }
@@ -365,7 +497,7 @@ func HandleEdit(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	w.Write([]byte(editHTML))
 }
 
 func HandleSave(w http.ResponseWriter, r *http.Request) {
@@ -392,59 +524,89 @@ func HandleSave(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "File saved successfully"})
 }
 
+func getMediaContentType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".ogg":
+		return "video/ogg"
+	case ".mov":
+		return "video/quicktime"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".m4v":
+		return "video/x-m4v"
+	case ".3gp":
+		return "video/3gpp"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".flac":
+		return "audio/flac"
+	case ".wma":
+		return "audio/x-ms-wma"
+	case ".opus":
+		return "audio/ogg; codecs=opus"
+	}
+	return "application/octet-stream"
+}
+
 func HandleRaw(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/raw/"):]
 	filePath := filepath.Join(PublicDir, filename)
-	content, err := os.ReadFile(filePath)
+
+	f, err := os.Open(filePath)
 	if err != nil {
 		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
 			"The file you're looking for doesn't exist.", "Path: "+r.URL.Path)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		http.Error(w, "Error getting file info", http.StatusInternalServerError)
 		return
 	}
 
 	fileType := GetFileType(filename)
 	ext := strings.ToLower(filepath.Ext(filename))
 
+	var contentType string
 	switch fileType {
 	case "text":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		contentType = "text/plain; charset=utf-8"
 	case "image":
-		ct := "image/jpeg"
 		switch ext {
 		case ".png":
-			ct = "image/png"
+			contentType = "image/png"
 		case ".gif":
-			ct = "image/gif"
+			contentType = "image/gif"
 		case ".webp":
-			ct = "image/webp"
+			contentType = "image/webp"
 		case ".svg":
-			ct = "image/svg+xml"
+			contentType = "image/svg+xml"
+		default:
+			contentType = "image/jpeg"
 		}
-		w.Header().Set("Content-Type", ct)
-	case "video":
-		ct := "video/mp4"
-		switch ext {
-		case ".webm":
-			ct = "video/webm"
-		case ".ogg":
-			ct = "video/ogg"
-		}
-		w.Header().Set("Content-Type", ct)
-	case "audio":
-		ct := "audio/mpeg"
-		switch ext {
-		case ".wav":
-			ct = "audio/wav"
-		case ".ogg":
-			ct = "audio/ogg"
-		case ".m4a":
-			ct = "audio/mp4"
-		}
-		w.Header().Set("Content-Type", ct)
+	case "video", "audio":
+		contentType = getMediaContentType(filename)
 	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
+		contentType = "application/octet-stream"
 	}
-	w.Write(content)
+
+	w.Header().Set("Content-Type", contentType)
+	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 }
 
 func HandleDownload(w http.ResponseWriter, r *http.Request) {
@@ -459,7 +621,7 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if Debug {
 		log.Printf("Download: %s", filename)
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filename))
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filename)+"\"")
 	http.ServeFile(w, r, filePath)
 }
 
@@ -480,7 +642,6 @@ func HandleDelete(w http.ResponseWriter, r *http.Request) {
 	DownloadMu.Unlock()
 	SaveDownloadCounts()
 
-	// Clean up permissions so deleted files don't linger in public list
 	PermissionMu.Lock()
 	delete(FilePermissions, filename)
 	PermissionMu.Unlock()
@@ -588,7 +749,7 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", "attachment; filename=archive.zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"archive.zip\"")
 	zipWriter := zip.NewWriter(w)
 	defer zipWriter.Close()
 
@@ -695,68 +856,124 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/stream/"):]
 	filePath := filepath.Join(PublicDir, filename)
 
-	file, err := os.Open(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
 			"The file you're looking for doesn't exist.", "Path: "+r.URL.Path)
 		return
 	}
-	defer file.Close()
+	defer f.Close()
 
-	stat, err := file.Stat()
+	stat, err := f.Stat()
 	if err != nil {
 		http.Error(w, "Error getting file info", http.StatusInternalServerError)
 		return
 	}
-	size := stat.Size()
 
-	ext := strings.ToLower(filepath.Ext(filename))
-	contentType := "video/mp4"
-	switch ext {
-	case ".webm":
-		contentType = "video/webm"
-	case ".ogg":
-		contentType = "video/ogg"
-	case ".mov":
-		contentType = "video/quicktime"
-	case ".avi":
-		contentType = "video/x-msvideo"
-	case ".mkv":
-		contentType = "video/x-matroska"
-	}
-
-	rangeHeader := r.Header.Get("Range")
-	if rangeHeader == "" {
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
-		w.Header().Set("Accept-Ranges", "bytes")
-		io.Copy(w, file)
-		return
-	}
-
-	var start, end int64
-	fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
-	if start >= size {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", size))
-		http.Error(w, "Requested Range Not Satisfiable", http.StatusRequestedRangeNotSatisfiable)
-		return
-	}
-	end = size - 1
-	if endStr := strings.Split(rangeHeader, "-")[1]; endStr != "" {
-		fmt.Sscanf(endStr, "%d", &end)
-		if end >= size {
-			end = size - 1
+	contentType := getMediaContentType(filename)
+	if contentType == "application/octet-stream" {
+		fileType := GetFileType(filename)
+		if fileType == "video" {
+			contentType = "video/mp4"
+		} else if fileType == "audio" {
+			contentType = "audio/mpeg"
 		}
 	}
 
-	contentLength := end - start + 1
-	file.Seek(start, 0)
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
-	w.WriteHeader(http.StatusPartialContent)
-	io.CopyN(w, file, contentLength)
+	w.Header().Set("Cache-Control", "no-cache")
+
+	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
+}
+
+func HandleStreamPage(w http.ResponseWriter, r *http.Request) {
+	filename := r.URL.Path[len("/play/"):]
+	filePath := filepath.Join(PublicDir, filename)
+
+	_, err := os.Stat(filePath)
+	if err != nil {
+		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
+			"The media file you're looking for doesn't exist.", "File: "+filename)
+		return
+	}
+
+	token := r.URL.Query().Get("token")
+	streamURL := "/stream/" + filename
+	if token != "" {
+		streamURL += "?token=" + token
+	}
+
+	fileType := GetFileType(filename)
+	baseName := filepath.Base(filename)
+
+	var playerHTML string
+	if fileType == "video" {
+		playerHTML = `<video id="player" controls playsinline preload="metadata" style="width:100%;max-height:80vh;background:#000;"
+            onerror="showError(this.error)">
+            <source src="` + streamURL + `">
+            Your browser does not support the video element.
+        </video>`
+	} else {
+		playerHTML = `<audio id="player" controls preload="metadata" style="width:100%;margin-top:40px;"
+            onerror="showError(this.error)">
+            <source src="` + streamURL + `">
+            Your browser does not support the audio element.
+        </audio>`
+	}
+
+	pageHTML := `<!DOCTYPE html>
+<html>
+<head>
+    <title>` + baseName + `</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+        .player-wrap { width: 100%; max-width: 960px; }
+        .player-title { font-size: 15px; font-weight: 500; margin-bottom: 16px; color: #ccc; word-break: break-all; }
+        .player-actions { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+        .btn { padding: 8px 18px; background: #fff; color: #000; text-decoration: none; border: none; cursor: pointer; font-size: 13px; border-radius: 4px; font-weight: 500; }
+        .btn:hover { background: #ddd; }
+        .btn-outline { background: transparent; color: #aaa; border: 1px solid #444; }
+        .btn-outline:hover { border-color: #888; color: #fff; }
+        .error-msg { display: none; color: #ff6b6b; margin-top: 16px; font-size: 14px; padding: 12px; background: #1a0a0a; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="player-wrap">
+        <div class="player-title">` + baseName + `</div>
+        ` + playerHTML + `
+        <div class="error-msg" id="errMsg"></div>
+        <div class="player-actions">
+            <a href="/download/` + filename + `?token=` + token + `" class="btn">Download</a>
+            <a href="/" class="btn btn-outline">Back</a>
+        </div>
+    </div>
+    <script>
+        function showError(err) {
+            const el = document.getElementById('errMsg');
+            let msg = 'Cannot play this file in your browser.';
+            if (err) {
+                switch(err.code) {
+                    case 1: msg = 'Playback aborted.'; break;
+                    case 2: msg = 'Network error while loading media.'; break;
+                    case 3: msg = 'Media decoding error — the format may not be supported.'; break;
+                    case 4: msg = 'Media format not supported by this browser. Try downloading the file.'; break;
+                }
+            }
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+        document.getElementById('player').addEventListener('error', function() {
+            showError(this.error);
+        });
+    </script>
+</body>
+</html>`
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(pageHTML))
 }
 
 func HandleCreateFolder(w http.ResponseWriter, r *http.Request) {
@@ -956,7 +1173,6 @@ func HandleFavicon(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "favicon.ico")
 }
 
-// HandleErrorPage shows a styled error/warning page for unauthorized access or wrong paths
 func HandleErrorPage(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	path := r.URL.Query().Get("path")
@@ -979,7 +1195,7 @@ func HandleErrorPage(w http.ResponseWriter, r *http.Request) {
 		pathHTML = `<div class="error-path">Requested path: <code>` + path + `</code></div>`
 	}
 
-	html := `<!DOCTYPE html>
+	pageHTML := `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -988,86 +1204,20 @@ func HandleErrorPage(w http.ResponseWriter, r *http.Request) {
     <title>` + code + ` - ` + title + `</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #0a0a0a;
-            color: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 24px;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
         .container { max-width: 580px; width: 100%; text-align: center; }
-        .code {
-            font-size: 96px;
-            font-weight: 700;
-            letter-spacing: -4px;
-            line-height: 1;
-            margin-bottom: 24px;
-            color: #e8b84b;
-        }
-        .warning-icon {
-            display: block;
-            margin: 0 auto 20px;
-            width: 56px;
-            height: 56px;
-            background: #e8b84b;
-            clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
-            position: relative;
-        }
-        .warning-icon::after {
-            content: '!';
-            position: absolute;
-            top: 52%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 28px;
-            font-weight: 700;
-            color: #0a0a0a;
-        }
+        .code { font-size: 96px; font-weight: 700; letter-spacing: -4px; line-height: 1; margin-bottom: 24px; color: #e8b84b; }
+        .warning-icon { display: block; margin: 0 auto 20px; width: 56px; height: 56px; background: #e8b84b; clip-path: polygon(50% 0%, 0% 100%, 100% 100%); position: relative; }
+        .warning-icon::after { content: '!'; position: absolute; top: 52%; left: 50%; transform: translate(-50%, -50%); font-size: 28px; font-weight: 700; color: #0a0a0a; }
         h1 { font-size: 26px; font-weight: 600; margin-bottom: 12px; }
         .message { font-size: 16px; color: #aaa; line-height: 1.6; margin-bottom: 16px; }
-        .hint {
-            font-size: 13px;
-            color: #666;
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-left: 3px solid #e8b84b;
-            padding: 14px 16px;
-            text-align: left;
-            margin-bottom: 24px;
-            border-radius: 0 4px 4px 0;
-            line-height: 1.5;
-        }
-        .error-path {
-            font-size: 12px;
-            color: #555;
-            margin-bottom: 24px;
-            font-family: monospace;
-        }
-        .error-path code {
-            background: #1a1a1a;
-            padding: 2px 8px;
-            border-radius: 3px;
-            color: #888;
-        }
+        .hint { font-size: 13px; color: #666; background: #1a1a1a; border: 1px solid #2a2a2a; border-left: 3px solid #e8b84b; padding: 14px 16px; text-align: left; margin-bottom: 24px; border-radius: 0 4px 4px 0; line-height: 1.5; }
+        .error-path { font-size: 12px; color: #555; margin-bottom: 24px; font-family: monospace; }
+        .error-path code { background: #1a1a1a; padding: 2px 8px; border-radius: 3px; color: #888; }
         .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-        .btn {
-            padding: 10px 22px;
-            background: #fff;
-            color: #000;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: 4px;
-        }
+        .btn { padding: 10px 22px; background: #fff; color: #000; text-decoration: none; font-size: 14px; font-weight: 500; border-radius: 4px; }
         .btn:hover { background: #e0e0e0; }
-        .btn-outline {
-            background: transparent;
-            color: #fff;
-            border: 1px solid #333;
-        }
+        .btn-outline { background: transparent; color: #fff; border: 1px solid #333; }
         .btn-outline:hover { border-color: #666; background: #1a1a1a; color: #fff; }
     </style>
 </head>
@@ -1089,10 +1239,9 @@ func HandleErrorPage(w http.ResponseWriter, r *http.Request) {
 </html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(403)
-	w.Write([]byte(html))
+	w.Write([]byte(pageHTML))
 }
 
-// HandleFolderInfo returns folder size, file count, and other metadata
 func HandleFolderInfo(w http.ResponseWriter, r *http.Request) {
 	folderPath := strings.TrimPrefix(r.URL.Path, "/folder-info/")
 	fullPath := filepath.Join(PublicDir, folderPath)
@@ -1127,4 +1276,171 @@ func HandleFolderInfo(w http.ResponseWriter, r *http.Request) {
 		"folder_count": folderCount,
 		"is_public":    exists && perm.IsPublic,
 	})
+}
+
+func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
+	filename := strings.TrimPrefix(r.URL.Path, "/embed/")
+	filePath := filepath.Join(PublicDir, filename)
+
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	token := r.URL.Query().Get("token")
+	baseName := filepath.Base(filename)
+	fileType := GetFileType(filename)
+
+	streamURL := "/stream/" + filename
+	downloadURL := "/download/" + filename
+	if token != "" {
+		streamURL += "?token=" + token
+		downloadURL += "?token=" + token
+	}
+
+	embedTitle := Cfg.EmbedTitle
+	if embedTitle == "" {
+		embedTitle = baseName + " — " + Cfg.SiteName
+	}
+	embedDesc := Cfg.EmbedDescription
+	if embedDesc == "" {
+		embedDesc = "File sharing powered by " + Cfg.SiteName
+	}
+	embedImage := Cfg.EmbedImageURL
+	if embedImage == "" {
+		embedImage = Cfg.IconURL
+	}
+
+	protocol := GetProtocol()
+	baseURL := protocol + "://" + r.Host
+
+	ogType := "website"
+	if fileType == "video" {
+		ogType = "video.other"
+	} else if fileType == "image" {
+		ogType = "image"
+		embedImage = baseURL + "/raw/" + filename
+		if token != "" {
+			embedImage += "?token=" + token
+		}
+	} else if fileType == "audio" {
+		ogType = "music.song"
+	}
+
+	var bodyContent string
+	switch fileType {
+	case "video":
+		bodyContent = `<video controls playsinline preload="metadata" style="width:100%;max-height:80vh;background:#000;border-radius:8px;">
+            <source src="` + streamURL + `">
+            <p style="color:#999;padding:20px;">Your browser does not support this video format. <a href="` + downloadURL + `" style="color:#e07820;">Download</a></p>
+        </video>`
+	case "audio":
+		bodyContent = `<div style="padding:40px 0;">
+            <div style="font-size:48px;text-align:center;margin-bottom:24px;">&#127925;</div>
+            <audio controls preload="metadata" style="width:100%;">
+                <source src="` + streamURL + `">
+                <p style="color:#999;">Your browser does not support this audio format. <a href="` + downloadURL + `" style="color:#e07820;">Download</a></p>
+            </audio>
+        </div>`
+	case "image":
+		imageURL := "/raw/" + filename
+		if token != "" {
+			imageURL += "?token=" + token
+		}
+		bodyContent = `<img src="` + imageURL + `" style="max-width:100%;max-height:80vh;object-fit:contain;border-radius:4px;">`
+	default:
+		bodyContent = `<div style="padding:60px;text-align:center;color:#999;">
+            <div style="font-size:48px;margin-bottom:16px;">&#128196;</div>
+            <div style="font-size:18px;font-weight:500;color:#fff;margin-bottom:8px;">` + baseName + `</div>
+            <div style="font-size:14px;margin-bottom:24px;">` + FormatBytes(stat.Size()) + `</div>
+            <a href="` + downloadURL + `" style="padding:12px 24px;background:#e07820;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;">Download</a>
+        </div>`
+	}
+
+	pageHTML := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>` + embedTitle + `</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <meta property="og:title" content="` + embedTitle + `">
+    <meta property="og:description" content="` + embedDesc + `">
+    <meta property="og:image" content="` + embedImage + `">
+    <meta property="og:type" content="` + ogType + `">
+    <meta property="og:url" content="` + baseURL + r.URL.Path + `">
+    <meta property="og:site_name" content="` + Cfg.SiteName + `">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="` + embedTitle + `">
+    <meta name="twitter:description" content="` + embedDesc + `">
+    <meta name="twitter:image" content="` + embedImage + `">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+        .embed-wrap { width: 100%; max-width: 900px; }
+        .embed-header { margin-bottom: 20px; }
+        .embed-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; word-break: break-all; }
+        .embed-meta { font-size: 13px; color: #888; }
+        .embed-body { background: #111; border-radius: 12px; overflow: hidden; padding: 16px; }
+        .embed-footer { margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .btn { padding: 9px 20px; background: #fff; color: #000; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500; }
+        .btn:hover { background: #ddd; }
+        .btn-outline { background: transparent; color: #aaa; border: 1px solid #333; }
+        .btn-outline:hover { border-color: #666; color: #fff; }
+        .powered { font-size: 11px; color: #444; margin-left: auto; }
+    </style>
+</head>
+<body>
+    <div class="embed-wrap">
+        <div class="embed-header">
+            <div class="embed-title">` + baseName + `</div>
+            <div class="embed-meta">` + FormatBytes(stat.Size()) + ` &middot; ` + fileType + ` &middot; ` + stat.ModTime().Format("2006-01-02") + `</div>
+        </div>
+        <div class="embed-body">` + bodyContent + `</div>
+        <div class="embed-footer">
+            <a href="` + downloadURL + `" class="btn">Download</a>
+            <a href="/" class="btn btn-outline">` + Cfg.SiteName + `</a>
+            <span class="powered">powered by servernotdie v` + VERSION + `</span>
+        </div>
+    </div>
+    <script>
+        document.querySelectorAll('video, audio').forEach(function(el) {
+            el.addEventListener('error', function() {
+                var err = el.error;
+                var msg = 'Cannot play in browser. ';
+                if (err && err.code === 4) msg += 'Format not supported — try downloading.';
+                var div = document.createElement('div');
+                div.style.cssText = 'color:#ff6b6b;padding:16px;font-size:14px;';
+                div.textContent = msg;
+                el.parentNode.insertBefore(div, el.nextSibling);
+            });
+        });
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(pageHTML))
+}
+
+
+
+func HandleLibFile(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/lib/")
+	if strings.Contains(name, "..") || strings.Contains(name, "/") {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	path := "lib/" + name
+	switch {
+	case strings.HasSuffix(name, ".js"):
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	case strings.HasSuffix(name, ".css"):
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, path)
 }
