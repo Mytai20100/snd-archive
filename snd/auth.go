@@ -3,11 +3,31 @@ package snd
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// formatDuration returns a human-readable ban duration string.
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= 30*24*time.Hour:
+		return "1 month"
+	case d >= 7*24*time.Hour:
+		return "7 days"
+	case d >= 24*time.Hour:
+		return "1 day"
+	case d >= time.Hour:
+		h := int(d.Hours())
+		return fmt.Sprintf("%d hour(s)", h)
+	default:
+		m := int(d.Minutes())
+		return fmt.Sprintf("%d minute(s)", m)
+	}
+}
 
 func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	var creds struct {
@@ -17,17 +37,90 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&creds)
 
-	if creds.Username != Cfg.Username || creds.Password != Cfg.Password {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "Invalid credentials",
-		})
-		return
+	w.Header().Set("Content-Type", "application/json")
+
+	// ── Admin brute-force protection ─────────────────────────────────────────
+	// Only applied when the submitted username matches the admin username.
+	if creds.Username == Cfg.Username {
+		ip := GetClientIP(r)
+		AdminLoginMu.Lock()
+		ban, exists := AdminLoginBans[ip]
+		if !exists {
+			ban = &AdminLoginBan{}
+			AdminLoginBans[ip] = ban
+		}
+		// Check if currently banned.
+		if time.Now().Before(ban.BanExpires) {
+			remaining := time.Until(ban.BanExpires).Round(time.Second)
+			AdminLoginMu.Unlock()
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Too many failed attempts. Try again in %s.", remaining),
+				"banned":  true,
+			})
+			return
+		}
+		AdminLoginMu.Unlock()
 	}
 
-	if Cfg.Enable2FA {
+	isAdmin := creds.Username == Cfg.Username && creds.Password == Cfg.Password
+	var loginUser *UserAccount
+
+	if !isAdmin {
+		// Wrong credentials — check if it's an admin username attempt.
+		if creds.Username == Cfg.Username {
+			ip := GetClientIP(r)
+			AdminLoginMu.Lock()
+			ban := AdminLoginBans[ip]
+			ban.FailCount++
+			d := BanLevel(ban.FailCount)
+			failCount := ban.FailCount
+			if d > 0 {
+				ban.BanExpires = time.Now().Add(d)
+				ban.BanDuration = d
+			}
+			AdminLoginMu.Unlock()
+			if d > 0 {
+				msg := fmt.Sprintf("Too many failed attempts. Banned for %s.", formatDuration(d))
+				log.Printf("[SECURITY] Admin brute-force from %s: attempt #%d, banned %s", ip, failCount, d)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": msg,
+					"banned":  true,
+				})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Invalid credentials",
+			})
+			return
+		}
+
+		// Non-admin user login.
+		u := GetUserByUsername(creds.Username)
+		if u == nil || !u.IsActive || !CheckPassword(u.PasswordHash, creds.Password) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Invalid credentials",
+			})
+			return
+		}
+		loginUser = u
+	}
+
+	// Successful admin login — clear ban record.
+	if isAdmin {
+		ip := GetClientIP(r)
+		AdminLoginMu.Lock()
+		delete(AdminLoginBans, ip)
+		AdminLoginMu.Unlock()
+	}
+
+	// 2FA only applies to admin
+	if isAdmin && Cfg.Enable2FA {
 		if creds.TwoFACode == "" {
-			code := GenerateRandomToken(82)
+			code := GenerateRandomToken(16)
 			TwoFAMu.Lock()
 			TwoFACodes[creds.Username] = TwoFACode{
 				Code:      code,
@@ -73,13 +166,13 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		TwoFAMu.Unlock()
 	}
 
-	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
+	// FIX: Use crypto/rand for session ID (was time.Now().UnixNano())
+	sessionID := GenerateRandomToken(32)
 	ip := GetClientIP(r)
 	ua := r.UserAgent()
 	osName, browser := ParseUserAgent(ua)
 
-	SessionMu.Lock()
-	Sessions[sessionID] = &SessionInfo{
+	session := &SessionInfo{
 		SessionID:  sessionID,
 		IP:         ip,
 		UserAgent:  ua,
@@ -88,29 +181,55 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		LoginTime:  time.Now(),
 		LastAccess: time.Now(),
 		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		IsAdmin:    isAdmin, // only true admin account gets IsAdmin=true
 	}
+	if loginUser != nil {
+		session.UserUUID = loginUser.UUID
+	}
+
+	SessionMu.Lock()
+	Sessions[sessionID] = session
 	SessionMu.Unlock()
 
+	// FIX: Set Secure only if connection is actually over TLS.
+	// Using Cfg.UseHTTPS here would break HTTP sessions because
+	// browsers refuse to send Secure cookies over plain HTTP.
+	isHTTPS := r.TLS != nil
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    sessionID,
 		Expires:  time.Now().Add(24 * time.Hour),
 		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isHTTPS,
+		Path:     "/",
 	})
 
 	LogAccess(ip, "login", "/login", ua)
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+
+	redirectTo := "/"
+	if loginUser != nil {
+		redirectTo = "/my"
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "redirect": redirectTo})
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	// FIX: Invalidate server-side session on logout
+	cookie, err := r.Cookie("session")
+	if err == nil && cookie.Value != "" {
+		SessionMu.Lock()
+		delete(Sessions, cookie.Value)
+		SessionMu.Unlock()
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    "",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Path:     "/",
 	})
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	http.Redirect(w, r, "/ac", http.StatusSeeOther)
 }
 
 func HandleSessions(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +239,7 @@ func HandleSessions(w http.ResponseWriter, r *http.Request) {
 	type SessionDisplay struct {
 		SessionID  string `json:"session_id"`
 		IP         string `json:"ip"`
+		Username   string `json:"username"`
 		OS         string `json:"os"`
 		Browser    string `json:"browser"`
 		LoginTime  string `json:"login_time"`
@@ -135,9 +255,16 @@ func HandleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for sid, s := range Sessions {
+		username := "admin"
+		if !s.IsAdmin && s.UserUUID != "" {
+			if u := GetUserByUUID(s.UserUUID); u != nil {
+				username = u.Username
+			}
+		}
 		sessionList = append(sessionList, SessionDisplay{
 			SessionID:  sid,
 			IP:         s.IP,
+			Username:   username,
 			OS:         s.OS,
 			Browser:    s.Browser,
 			LoginTime:  s.LoginTime.Format("2006-01-02 15:04:05"),
@@ -201,31 +328,37 @@ func send2FACodeToDiscord(username string, code string) error {
 	return nil
 }
 
+// isSafeRedirectPath validates that a redirect path is a relative path only.
+func isSafeRedirectPath(p string) bool {
+	if p == "" {
+		return false
+	}
+	u, err := url.Parse(p)
+	if err != nil || u.Scheme != "" || u.Host != "" {
+		return false
+	}
+	return strings.HasPrefix(p, "/")
+}
+
 func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
 	returnPath := r.URL.Query().Get("return")
-	if returnPath == "" {
+	// FIX: Validate redirect path to prevent XSS and open redirect
+	if !isSafeRedirectPath(returnPath) {
 		returnPath = "/"
 	}
-	html := `<!DOCTYPE html>
+	// FIX: HTML-escape for safe embedding in JS string literal
+	safeReturn := html.EscapeString(returnPath)
+
+	pageHTML := `<!DOCTYPE html>
 <html>
 <head>
     <title>Checking your browser</title>
     <style>
-        body {
-            font-family: -apple-system, sans-serif;
-            display: flex; align-items: center; justify-content: center;
-            min-height: 100vh; background: #fafafa;
-        }
-        .challenge-box {
-            text-align: center; background: white;
-            padding: 40px; border: 1px solid #e0e0e0; max-width: 500px;
-        }
-        .spinner {
-            border: 3px solid #f3f3f3; border-top: 3px solid #1a1a1a;
-            border-radius: 50%; width: 50px; height: 50px;
-            animation: spin 1s linear infinite; margin: 20px auto;
-        }
+        body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; }
+        .challenge-box { text-align: center; background: white; padding: 40px; border: 1px solid #e0e0e0; max-width: 500px; border-radius: 4px; }
+        .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #1a1a1a; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        p { color: #666; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -235,13 +368,22 @@ func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
         <p>This process is automatic. You will be redirected shortly.</p>
     </div>
     <script>
-        setTimeout(() => {
-            document.cookie = "cf_passed=true; path=/; max-age=86400";
-            window.location.href = "` + returnPath + `";
-        }, 3000);
+        (function() {
+            var dest = '` + safeReturn + `';
+            // Ensure dest is a safe relative path
+            if (!dest || dest.indexOf('//') !== -1 || dest.indexOf(':') !== -1) {
+                dest = '/';
+            }
+            if (dest.charAt(0) !== '/') dest = '/' + dest;
+            setTimeout(function() {
+                document.cookie = "cf_passed=true; path=/; max-age=86400";
+                window.location.href = dest;
+            }, 3000);
+        })();
     </script>
 </body>
 </html>`
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(pageHTML))
 }

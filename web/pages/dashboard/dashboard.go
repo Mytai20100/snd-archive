@@ -14,17 +14,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sub-users always belong in /my — redirect immediately
+	if su := snd.GetSessionUser(r); su != nil {
+		http.Redirect(w, r, "/my", http.StatusSeeOther)
+		return
+	}
+
 	isAuth := snd.IsAuthenticated(r)
+	isAdminUser := snd.IsAdminAuthenticated(r)
 	authStatus := "false"
-	authButtons := `<a href="/ac" class="btn">Login</a>`
+	authButtons := `<a href="/ac" class="btn" data-i18n="nav_login">Login</a>`
 	uploadSectionDisplay := "none"
 	apiTokenSection := ""
 
 	if isAuth {
 		authStatus = "true"
-		authButtons = `<button class="btn" onclick="openCreateFolderModal()">New Folder</button>
-                       <a href="/ad" class="btn">Admin</a>
-                       <a href="#" onclick="logout(); return false;" class="btn">Logout</a>`
+		// Only admin reaches here (sub-users are redirected to /my above)
+		authButtons = `<button class="btn" onclick="openCreateFolderModal()" data-i18n="nav_new_folder">New Folder</button>
+                       <a href="/ad" class="btn" data-i18n="nav_admin">Admin</a>
+                       <a href="#" onclick="logout(); return false;" class="btn" data-i18n="nav_logout">Logout</a>`
+		_ = isAdminUser
 		uploadSectionDisplay = "block"
 		apiTokenSection = fmt.Sprintf(`
         <div class="upload-section" id="apiTokenSection" style="background:#fff3e0;border:2px solid #f57c00;position:relative;">
@@ -160,13 +169,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .files-section { padding: 20px; }
         .file-item {
             display: grid;
-            grid-template-columns: auto 1fr auto;
+            grid-template-columns: auto auto 1fr auto;
             gap: 12px;
-            align-items: center;
+            align-items: start;
             padding: 14px 12px;
             border-bottom: 1px solid #f0f0f0;
             transition: background 0.15s;
         }
+        .file-item > input[type="checkbox"] { margin-top: 28px; }
+        .file-item .file-actions { padding-top: 4px; }
         .file-item:hover { background: #fafafa; }
         .file-info { min-width: 0; }
         .file-name {
@@ -487,10 +498,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         <div class="upload-section">
             <div class="upload-area" id="uploadArea">
                 <input type="file" id="fileInput" multiple>
-                <div class="upload-text">Drop files or click to upload (multiple files supported)</div>
+                <div class="upload-text" data-i18n="upload_drop_text">Drop files or click to upload (multiple files supported)</div>
             </div>
             <div class="selected-files" id="selectedFiles"></div>
-            <button class="upload-btn" onclick="uploadFiles()">Upload</button>
+            <button class="upload-btn" onclick="uploadFiles()" data-i18n="file_upload">Upload</button>
         </div>
 
         ` + apiTokenSection + `
@@ -504,9 +515,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
 
         <div class="bulk-actions" id="bulkActions">
-            <span id="selectedCount" style="font-size:14px;color:#666;">0 selected</span>
-            <button class="btn-small" onclick="downloadSelectedAsZip()">Download as ZIP</button>
-            <button class="btn-small" onclick="deselectAll()">Deselect All</button>
+            <span id="selectedCount" style="font-size:14px;color:#666;font-weight:500;">0 selected</span>
+            <button class="btn-small" onclick="downloadSelectedAsZip()" title="Package selected as ZIP" data-i18n="bulk_zip_download">ZIP Download</button>
+            <button class="btn-small" onclick="bulkSetPublic(true)" title="Make selected files public" style="background:#2e7d32;" data-i18n="bulk_make_public">Make Public</button>
+            <button class="btn-small" onclick="bulkSetPublic(false)" title="Make selected files private" style="background:#c62828;" data-i18n="bulk_make_private">Make Private</button>
+            <button class="btn-small" onclick="bulkDelete()" title="Delete selected files" style="background:#d32f2f;" data-i18n="bulk_delete">Delete</button>
+            <button class="btn-small" onclick="deselectAll()" style="background:#555;" data-i18n="bulk_deselect">Deselect All</button>
         </div>
 
         <div class="files-section" id="filesSection">
@@ -590,7 +604,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     </div>
 
     <div class="footer">
-        <strong>ServerNotDie</strong> v` + snd.VERSION + `
+        ` + snd.Cfg.SiteName + ` v` + snd.VERSION + `
     </div>
 
     <script>
@@ -629,6 +643,113 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                           document.getElementById('apiTokenDisplay').value : '` + snd.Cfg.APIToken + `';
             return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
         }
+
+        function getAuthToken() {
+            const el = document.getElementById('apiTokenDisplay');
+            return el ? el.value : '` + snd.Cfg.APIToken + `';
+        }
+
+        // ─── Preview Modal (click on card) ────────────────────────────────────
+        // allFiles stores current file list for auto-advance
+        let _previewFiles = [];
+        let _previewIdx = -1;
+
+        function setPreviewFiles(files) { _previewFiles = files; }
+
+        function openPreviewModal(filename, type) {
+            _previewIdx = _previewFiles.findIndex(f => {
+                const fn = currentPath ? currentPath + '/' + f.name : f.name;
+                return fn === filename;
+            });
+            showPreview(filename, type);
+        }
+
+        function showPreview(filename, type) {
+            const rawUrl = '/api/view/' + encodeURIComponent(filename);
+            const streamUrl = '/stream/' + encodeURIComponent(filename);
+            const baseName = filename.split('/').pop();
+
+            if (type === 'image') {
+                document.getElementById('viewTitle').textContent = baseName;
+                document.getElementById('viewBody').innerHTML =
+                    '<div style="text-align:center;padding:8px;">' +
+                    '<img src="' + rawUrl + '" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;" alt="' + escapeHtml(baseName) + '">' +
+                    '</div>' +
+                    '<div style="text-align:center;margin-top:12px;">' +
+                    '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
+                    '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button>' +
+                    '</div>';
+                document.getElementById('viewModal').style.display = 'block';
+                return;
+            }
+
+            if (type === 'video' || type === 'audio') {
+                const ext = filename.split('.').pop().toLowerCase();
+                if (ext === 'm3u8') {
+                    // HLS — use native player in modal
+                    document.getElementById('viewTitle').textContent = baseName;
+                    document.getElementById('viewBody').innerHTML =
+                        '<video id="hlsPlayer" controls autoplay playsinline style="width:100%;max-height:70vh;background:#000;border-radius:4px;"></video>' +
+                        '<div style="text-align:center;margin-top:12px;">' +
+                        '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
+                        '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
+                    document.getElementById('viewModal').style.display = 'block';
+                    const v = document.getElementById('hlsPlayer');
+                    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                        const h = new Hls(); h.loadSource(streamUrl); h.attachMedia(v); v.play().catch(()=>{});
+                    } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+                        v.src = streamUrl; v.play().catch(()=>{});
+                    }
+                    v.addEventListener('ended', () => advancePreview(1));
+                } else {
+                    // Use csa.js player for all other video/audio
+                    if (typeof csa !== 'undefined' && csa.player) {
+                        csa.player({
+                            src: addTokenToURL(streamUrl),
+                            title: baseName,
+                            mode: 'modal',
+                            autoplay: true,
+                            loader: 'ring',
+                            theme: { accent: '#e07820', accent2: '#ffaa55' },
+                            onEnded: () => advancePreview(1)
+                        });
+                    } else {
+                        // Fallback: native player
+                        document.getElementById('viewTitle').textContent = baseName;
+                        const tag = type === 'audio' ? 'audio' : 'video';
+                        const style = type === 'audio' ? 'width:100%;margin:20px 0;' : 'width:100%;max-height:70vh;background:#000;border-radius:4px;';
+                        document.getElementById('viewBody').innerHTML =
+                            '<' + tag + ' id="mediaPlayer" controls autoplay playsinline style="' + style + '" onended="advancePreview(1)">' +
+                            '<source src="' + addTokenToURL(streamUrl) + '">' +
+                            '</' + tag + '>' +
+                            '<div style="text-align:center;margin-top:12px;">' +
+                            '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
+                            '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
+                        document.getElementById('viewModal').style.display = 'block';
+                    }
+                }
+                return;
+            }
+            // Fallback to original viewFile for other types
+            viewFile(filename, type);
+        }
+
+        function advancePreview(dir) {
+            if (_previewFiles.length === 0) return;
+            const mediaTypes = ['image','video','audio'];
+            let next = _previewIdx + dir;
+            // Find next previewable file
+            while (next >= 0 && next < _previewFiles.length) {
+                if (mediaTypes.includes(_previewFiles[next].type)) break;
+                next += dir;
+            }
+            if (next < 0 || next >= _previewFiles.length) return;
+            _previewIdx = next;
+            const f = _previewFiles[next];
+            const fn = currentPath ? currentPath + '/' + f.name : f.name;
+            showPreview(fn, f.type);
+        }
+
 
         // --- Navigation ---
         function navigateToFolder(folderName) { currentPath = folderName; loadFiles(); updateBreadcrumb(); }
@@ -726,6 +847,61 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         function updateBulkCount() {
             document.getElementById('selectedCount').textContent = selectedFiles.size + ' selected';
         }
+        function bulkSetPublic(isPublic) {
+            if (!selectedFiles.size) return;
+            var files = Array.from(selectedFiles);
+            Promise.all(files.map(function(f) {
+                return fetch('/set-permission', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f,is_public:isPublic})});
+            })).then(function() {
+                showToast(files.length + ' files ' + (isPublic ? 'made public' : 'made private'), 'success');
+                deselectAll(); loadFiles();
+            }).catch(function() { showToast('Some permissions failed','error'); });
+        }
+
+        function bulkDelete() {
+            if (!selectedFiles.size) return;
+            var files = Array.from(selectedFiles);
+            showConfirm('Delete ' + files.length + ' file(s)? Cannot be undone.', function() {
+                Promise.all(files.map(function(f) { return fetch('/delete/' + encodeURIComponent(f), {method:'DELETE'}); }))
+                    .then(function() { showToast(files.length + ' files deleted', 'success'); deselectAll(); loadFiles(); })
+                    .catch(function() { showToast('Some deletes failed','error'); });
+            });
+        }
+
+        function showConfirm(message, onYes) {
+            var modal = document.getElementById('_confirmModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = '_confirmModal';
+                modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;';
+                var box = document.createElement('div');
+                box.style.cssText = 'background:#fff;border-radius:8px;padding:28px;min-width:300px;max-width:400px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
+                var msgEl = document.createElement('div');
+                msgEl.id = '_confirmMsg';
+                msgEl.style.cssText = 'font-size:15px;margin-bottom:20px;line-height:1.5;color:#1a1a1a;';
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+                var cancelBtn = document.createElement('button');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.style.cssText = 'padding:8px 20px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:14px;';
+                cancelBtn.onclick = function() { modal.style.display = 'none'; };
+                var yesBtn = document.createElement('button');
+                yesBtn.id = '_cBtnYes';
+                yesBtn.textContent = 'Confirm';
+                yesBtn.style.cssText = 'padding:8px 20px;background:#d32f2f;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;';
+                row.appendChild(cancelBtn);
+                row.appendChild(yesBtn);
+                box.appendChild(msgEl);
+                box.appendChild(row);
+                modal.appendChild(box);
+                document.body.appendChild(modal);
+                modal.addEventListener('click', function(e) { if (e.target === modal) modal.style.display = 'none'; });
+            }
+            document.getElementById('_confirmMsg').textContent = message;
+            document.getElementById('_cBtnYes').onclick = function() { modal.style.display = 'none'; if (onYes) onYes(); };
+            modal.style.display = 'flex';
+        }
+
         function downloadSelectedAsZip() {
             if (!selectedFiles.size) return;
             const files = Array.from(selectedFiles);
@@ -746,7 +922,29 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         function toggleContextMenu(e, id) {
             e.stopPropagation();
             document.querySelectorAll('.context-menu').forEach(m => { if (m.id !== 'menu-' + id) m.classList.remove('show'); });
-            document.getElementById('menu-' + id).classList.toggle('show');
+            const menu = document.getElementById('menu-' + id);
+            // FIX: When liquid glass is active, context-menu uses position:fixed (to escape the
+            // backdrop-filter stacking context on .file-item). Compute viewport coords from the button.
+            if (document.body.classList.contains('th-liquid')) {
+                const btn = e.currentTarget || e.target;
+                const rect = btn.getBoundingClientRect();
+                const menuW = 200; // min-width of menu
+                // Position below button, align right edge with button right
+                let top = rect.bottom + 4;
+                let right = window.innerWidth - rect.right;
+                // Clamp: if menu would overflow bottom of viewport, flip above
+                if (top + 200 > window.innerHeight) {
+                    top = Math.max(4, rect.top - 4 - 200);
+                }
+                // Clamp: if right side would push off left edge, pin to left side
+                if (rect.right - menuW < 0) {
+                    right = window.innerWidth - Math.min(rect.right + menuW, window.innerWidth - 4);
+                }
+                menu.style.top = top + 'px';
+                menu.style.right = right + 'px';
+                menu.style.left = 'auto';
+            }
+            menu.classList.toggle('show');
         }
         document.addEventListener('click', () => document.querySelectorAll('.context-menu').forEach(m => m.classList.remove('show')));
 
@@ -935,7 +1133,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         const escapedF  = folder.replace(/'/g, "\\'");
                         const safeId    = 'snd-item-' + folder.replace(/[^a-zA-Z0-9]/g, '_');
                         html += '<div class="file-item" id="' + safeId + '" style="background:#f9f9f9;">';
-                        html += '<div style="font-size:28px;line-height:1;">&#128193;</div>';
+                        html += '<input type="checkbox" class="checkbox file-checkbox" style="visibility:hidden;" disabled>';
+                        html += '<div style="font-size:28px;line-height:1;width:72px;display:flex;align-items:center;justify-content:center;">&#128193;</div>';
                         html += '<div class="file-info" onclick="navigateToFolder(\'' + escapedFP + '\')" style="cursor:pointer;">';
                         html += '<div class="file-name" style="font-weight:600;">' + escapeHtml(folder);
                         html += '<span class="file-type-badge" style="background:#e3f2fd;color:#1976d2">FOLDER</span>';
@@ -969,6 +1168,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         });
                     }
 
+                    setPreviewFiles(files);
                     files.forEach(f => {
                         const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
                         const rawUrl = window.location.origin + '/raw/' + encodeURIComponent(fullFileName);
@@ -991,6 +1191,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         const safeFileId = 'snd-item-' + f.name.replace(/[^a-zA-Z0-9]/g, '_');
                         html += '<div class="file-item" id="' + safeFileId + '">';
                         html += '<input type="checkbox" class="checkbox file-checkbox" onchange="toggleFileSelect(\'' + esc + '\',this)">';
+
+                        // ── Thumbnail / Icon (shown first) ──────────────────
+                        if (f.type === 'image' || f.type === 'video') {
+                            const thumbSrc = '/thumbnail/' + encodeURIComponent(fullFileName);
+                            html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
+                                '<img src="' + thumbSrc + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + f.type + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
+                                '</div>';
+                        } else {
+                            html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f5f5f5;display:flex;align-items:center;justify-content:center;">' +
+                                '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                                '</div>';
+                        }
+
                         html += '<div class="file-info">';
                         html += '<div class="file-name">' + escapeHtml(f.name);
                         html += '<span class="file-type-badge" style="' + badgeStyle + '">' + f.type + '</span>';
@@ -1003,31 +1216,31 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                             html += '<span class="file-type-badge" style="' + (isPublic ? 'background:#4caf50;color:white' : 'background:#f44336;color:white') + ';margin-left:4px">' + (isPublic ? 'PUBLIC' : 'PRIVATE') + '</span>';
                         }
 
+
                         html += '</div>';
                         html += '<div class="file-meta">' + formatFileSize(f.size) + ' - ' + modDate;
                         if (f.download_count > 0) html += ' - ' + f.download_count + ' downloads';
                         html += '</div>';
-                        html += '<div class="file-link" onclick="copyLink(\'' + esc + '\')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
+                        html += '<div class="file-link" onclick="copyLink(\'' + esc + '\',' + isPublic + ')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
                         html += '</div>';
-
+                        // file-actions stays INSIDE .file-item grid
                         html += '<div class="file-actions">';
-                        html += '<button class="menu-btn" onclick="toggleContextMenu(event,\'' + esc + '\');return false;">&#8942;</button>';
-                        html += '<div class="context-menu" id="menu-' + esc + '">';
+                        html += '<button class="menu-btn" onclick="toggleContextMenu(event,\'' + safeFileId + '\');return false;">&#8942;</button>';
+                        html += '<div class="context-menu" id="menu-' + safeFileId + '">';
 
                         const viewLabel = (f.type === 'video' || f.type === 'audio') ? 'Play' : 'View';
-                        html += '<div class="context-menu-item" onclick="viewFile(\'' + esc + '\',\'' + f.type + '\')">'+viewLabel+'</div>';
+                        html += '<div class="context-menu-item" onclick="viewFile(\''+esc+'\',\''+f.type+'\')">'+viewLabel+'</div>';
                         if (isAuthenticated) {
-                            html += '<div class="context-menu-item" onclick="editFile(\'' + esc + '\')">Edit</div>';
+                            html += '<div class="context-menu-item" onclick="editFile(\''+esc+'\')">Edit</div>';
                         }
-                        html += '<div class="context-menu-item" onclick="downloadFile(\'' + esc + '\')">Download</div>';
-                        html += '<div class="context-menu-item" onclick="copyLink(\'' + esc + '\')">Copy link</div>';
-                        html += '<div class="context-menu-item" onclick="downloadAsZip(\'' + esc + '\')">Download as ZIP</div>';
+                        html += '<div class="context-menu-item" onclick="copyLink(\''+esc+'\',' + isPublic + ')">Copy link</div>';
+                        html += '<div class="context-menu-item" onclick="downloadAsZip(\''+esc+'\')">Download as ZIP</div>';
                         if (isAuthenticated) {
-                            html += '<div class="context-menu-item" onclick="renameFile(\'' + esc + '\')">Rename</div>';
-                            html += '<div class="context-menu-item" onclick="duplicateFile(\'' + esc + '\')">Duplicate</div>';
-                            html += '<div class="context-menu-item danger" onclick="deleteFile(\'' + esc + '\')">Delete</div>';
+                            html += '<div class="context-menu-item" onclick="renameFile(\''+esc+'\')">Rename</div>';
+                            html += '<div class="context-menu-item" onclick="duplicateFile(\''+esc+'\')">Duplicate</div>';
+                            html += '<div class="context-menu-item danger" onclick="deleteFile(\''+esc+'\')">Delete</div>';
                         }
-                        html += '</div></div></div>';
+                        html += '</div></div></div>'; // close context-menu, file-actions, file-item
                     });
 
                     section.innerHTML = html;
@@ -1050,8 +1263,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             }).catch(() => { showToast('Failed to update permission','error'); loadFiles(); });
         }
 
-        function copyLink(filename) {
-            const url = addTokenToURL(window.location.origin + '/raw/' + encodeURIComponent(filename));
+        function copyLink(filename, isPublic) {
+            // Security fix: public files don't need token in URL
+            const base = window.location.origin + '/raw/' + encodeURIComponent(filename);
+            const url = isPublic ? base : addTokenToURL(base);
             navigator.clipboard.writeText(url)
                 .then(() => showToast('Link copied!','success'))
                 .catch(() => showToast('Failed to copy link','error'));
@@ -1348,6 +1563,25 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         loadFiles();
     </script>
+` + snd.ThemeSnippet("dashboard") + `
+<script>
+// FIX: Language system — fetch translations from /api/lang and apply data-i18n attributes
+(function() {
+    fetch('/api/lang').then(r => r.json()).then(function(t) {
+        if (!t || typeof t !== 'object') return;
+        document.querySelectorAll('[data-i18n]').forEach(function(el) {
+            var key = el.getAttribute('data-i18n');
+            if (t[key]) el.textContent = t[key];
+        });
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+            var key = el.getAttribute('data-i18n-placeholder');
+            if (t[key]) el.placeholder = t[key];
+        });
+        // Expose globally so dynamic content can use it
+        window._lang = t;
+    }).catch(function(){});
+})();
+</script>
 </body>
 </html>`
 

@@ -94,7 +94,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .files-section { padding: 20px; }
         .file-item {
             display: grid;
-            grid-template-columns: 1fr auto;
+            grid-template-columns: auto 1fr auto;
             gap: 12px;
             align-items: center;
             padding: 16px 12px;
@@ -237,10 +237,28 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .csa-ldr-ring { border-top-color: #e07820 !important; }
 
         @media (max-width: 768px) {
-            .file-item { grid-template-columns: 1fr; }
+            .file-item { grid-template-columns: auto 1fr; }
             .file-actions { justify-content: flex-start; }
             .stats-bar { flex-wrap: wrap; gap: 12px; }
         }
+
+        /* Liquid Glass */
+        body.th-liquid .file-item, body.th-liquid .container, body.th-liquid .header, body.th-liquid .modal-content {
+            background: rgba(255,255,255,0.08) !important;
+            backdrop-filter: blur(24px) saturate(180%) !important;
+            -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+            border-color: rgba(255,255,255,0.18) !important;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.3) !important;
+        }
+        body.th-liquid .file-item { border-radius: 12px !important; margin-bottom: 4px !important; }
+        body.th-liquid .file-name { color: rgba(255,255,255,0.88) !important; }
+        body.th-liquid .file-meta, body.th-liquid .stats-bar { color: rgba(255,255,255,0.55) !important; }
+        body.th-liquid .file-url { color: rgba(150,200,255,0.75) !important; }
+        body.th-liquid h1, body.th-liquid h2, body.th-liquid h3 { color: rgba(255,255,255,0.92) !important; }
+        body.th-liquid .action-btn { background: rgba(255,255,255,0.12) !important; border-color: rgba(255,255,255,0.2) !important; color: rgba(255,255,255,0.85) !important; }
+        body.th-liquid:not(.th-rainbow):not(.th-dark) { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%) !important; }
+        body.th-dark .file-item { background: #181818 !important; border-color: #2a2a2a !important; }
+        body.th-dark .header { background: #111 !important; border-color: #2a2a2a !important; }
     </style>
 </head>
 <body>
@@ -279,8 +297,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <div class="footer">
-        <strong>ServerNotDie</strong> v` + snd.VERSION + `
+    <div class="footer" id="siteFooter">
+        <strong>` + snd.Cfg.SiteName + `</strong> — public files — v` + snd.VERSION + `
     </div>
 
     <script>
@@ -289,14 +307,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         async function loadPublicFiles() {
             try {
-                const res = await fetch('/files');
+                const res = await fetch('/public-files');
                 if (!res.ok) throw new Error();
-                const data = await res.json();
-                const files = (data.files || []).filter(f => f.is_public);
-                allFiles = files;
-                filteredFiles = files;
-                renderFiles(files);
-                updateStats(files);
+                const files = await res.json();
+                allFiles = files || [];
+                filteredFiles = allFiles;
+                renderFiles(allFiles);
+                updateStats(allFiles);
             } catch {
                 document.getElementById('filesSection').innerHTML =
                     '<div class="empty-state"><div class="title">Unable to load files</div></div>';
@@ -306,26 +323,56 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         function updateStats(files) {
             const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
             const totalDownloads = files.reduce((sum, f) => sum + (f.download_count || 0), 0);
+            const admFiles = files.filter(f => !f.user_uuid).length;
+            const userFiles = files.filter(f => !!f.user_uuid).length;
             document.getElementById('statsBar').innerHTML =
                 '<span><strong>' + files.length + '</strong> public files</span>' +
                 '<span>Total size: <strong>' + formatFileSize(totalSize) + '</strong></span>' +
-                '<span>Total downloads: <strong>' + totalDownloads + '</strong></span>';
+                '<span>Downloads: <strong>' + totalDownloads + '</strong></span>' +
+                (userFiles > 0 ? '<span>Admin: <strong>' + admFiles + '</strong> &nbsp;|&nbsp; Users: <strong>' + userFiles + '</strong></span>' : '');
         }
 
         function filterFiles() {
             const q = document.getElementById('searchInput').value.toLowerCase();
-            filteredFiles = q ? allFiles.filter(f => f.name.toLowerCase().includes(q)) : allFiles;
+            filteredFiles = q ? allFiles.filter(f => (f.name + ' ' + (f.owner||'')).toLowerCase().includes(q)) : allFiles;
             renderFiles(filteredFiles);
         }
 
+        // ── URL builders ─────────────────────────────────────────────────────
+        function buildRawUrl(f) {
+            if (f.user_uuid && f.raw_path)
+                return window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
+            return window.location.origin + '/raw/' + encodeURIComponent(f.name);
+        }
+        function buildStreamUrl(f) {
+            if (f.user_uuid && f.raw_path)
+                return '/stream/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
+            return '/stream/' + encodeURIComponent(f.name);
+        }
+        function buildApiViewUrl(f) {
+            if (f.user_uuid && f.raw_path)
+                return '/api/view/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
+            return '/api/view/' + encodeURIComponent(f.name);
+        }
+        function buildThumbnailUrl(f) {
+            if (f.user_uuid && f.raw_path)
+                return '/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
+            return '/thumbnail/' + encodeURIComponent(f.name);
+        }
+        function buildDownloadUrl(f) {
+            if (f.user_uuid && f.raw_path)
+                return '/download/' + encodeURIComponent(f.raw_path) + '?u=' + f.user_uuid;
+            return '/download/' + encodeURIComponent(f.name);
+        }
+
+        // ── Render ────────────────────────────────────────────────────────────
         function renderFiles(files) {
             const section = document.getElementById('filesSection');
             if (!files.length) {
-                section.innerHTML = '<div class="empty-state"><div class="title">No public files available</div><div class="subtitle">Files marked as public by the administrator will appear here.</div></div>';
+                section.innerHTML = '<div class="empty-state"><div class="title">No public files available</div><div class="subtitle">Files marked as public will appear here.</div></div>';
                 return;
             }
-
-            const badgeStyles = {
+            const badgeColors = {
                 text:    'background:#e8f5e9;color:#2e7d32',
                 image:   'background:#e3f2fd;color:#1976d2',
                 video:   'background:#fce4ec;color:#c2185b',
@@ -333,115 +380,124 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 archive: 'background:#fff3e0;color:#f57c00',
                 document:'background:#ffebee;color:#d32f2f',
             };
-
-            section.innerHTML = files.map(f => {
-                const rawUrl = window.location.origin + '/raw/' + encodeURIComponent(f.name);
-                const esc = f.name.replace(/'/g, "\\'");
-                const badgeStyle = badgeStyles[f.type] || 'background:#f5f5f5;color:#616161';
+            setPreviewFiles(files);
+            section.innerHTML = files.map((f, idx) => {
+                const rawUrl = buildRawUrl(f);
                 const modDate = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
+                const typeBadge = badgeColors[f.type] || 'background:#f5f5f5;color:#616161';
 
-                let previewBtn = '';
-                if (f.type === 'image' || f.type === 'text' || f.type === 'video' || f.type === 'audio') {
-                    previewBtn = '<button class="action-btn" onclick="viewFile(\'' + esc + '\',\'' + f.type + '\')">Preview</button>';
-                }
+                // Owner badge: green for user files, blue for admin
+                const isUser = !!f.user_uuid;
+                const ownerBadge = f.owner
+                    ? (isUser
+                        ? '<span class="file-type-badge" style="background:#e8f5e9;color:#2e7d32;margin-left:4px;">' + escapeHtml(f.owner) + '</span>'
+                        : '<span class="file-type-badge" style="background:#e8eaf6;color:#3949ab;margin-left:4px;">admin</span>')
+                    : '';
+
+                const previewBtn = ['image','text','video','audio'].includes(f.type)
+                    ? '<button class="action-btn" onclick="openPreviewByIdx(' + idx + ')">Preview</button>'
+                    : '';
+
+                const thumbHtml = (f.type === 'image' || f.type === 'video')
+                    ? '<div onclick="openPreviewByIdx(' + idx + ')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
+                      '<img src="' + buildThumbnailUrl(f) + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" ' +
+                      'onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + f.type + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
+                      '</div>'
+                    : '<div onclick="openPreviewByIdx(' + idx + ')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                      '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                      '</div>';
 
                 return '<div class="file-item">' +
+                    thumbHtml +
                     '<div class="file-info">' +
                     '<div class="file-name">' + escapeHtml(f.name) +
-                    '<span class="file-type-badge" style="' + badgeStyle + '">' + f.type + '</span>' +
-                    '</div>' +
-                    '<div class="file-meta">' + formatFileSize(f.size) + ' - ' + modDate +
-                    (f.download_count > 0 ? ' - ' + f.download_count + ' downloads' : '') +
-                    '</div>' +
-                    '<div class="file-url" onclick="copyLink(\'' + esc + '\')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>' +
+                    '<span class="file-type-badge" style="' + typeBadge + '">' + f.type + '</span>' +
+                    ownerBadge + '</div>' +
+                    '<div class="file-meta">' + formatFileSize(f.size) + ' &middot; ' + modDate +
+                    (f.download_count > 0 ? ' &middot; ' + f.download_count + ' downloads' : '') + '</div>' +
+                    '<div class="file-url" onclick="copyFileLink(' + idx + ')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>' +
                     '</div>' +
                     '<div class="file-actions">' +
                     previewBtn +
-                    '<a href="/download/' + encodeURIComponent(f.name) + '" class="action-btn">Download</a>' +
-                    '<button class="action-btn" onclick="copyLink(\'' + esc + '\')">Copy link</button>' +
-                    '</div>' +
-                    '</div>';
+                    '<a href="' + buildDownloadUrl(f) + '" class="action-btn">Download</a>' +
+                    '<button class="action-btn" onclick="copyFileLink(' + idx + ')">Copy link</button>' +
+                    '</div></div>';
             }).join('');
         }
 
-        function copyLink(filename) {
-            const url = window.location.origin + '/raw/' + encodeURIComponent(filename);
-            navigator.clipboard.writeText(url)
+        function copyFileLink(idx) {
+            const f = filteredFiles[idx];
+            if (!f) return;
+            navigator.clipboard.writeText(buildRawUrl(f))
                 .then(() => showToast('Link copied!'))
                 .catch(() => showToast('Failed to copy'));
         }
 
-        function viewFile(filename, type) {
-            const rawUrl = '/raw/' + encodeURIComponent(filename);
-            const streamUrl = '/stream/' + encodeURIComponent(filename);
-            const viewBody = document.getElementById('viewBody');
-            document.getElementById('viewTitle').textContent = filename;
+        // ── Preview modal ─────────────────────────────────────────────────────
+        let _shareFiles = [];
+        let _shareIdx = -1;
+        function setPreviewFiles(files) { _shareFiles = files; }
 
-            if (type === 'video') {
-                csa.player({
-                    src: streamUrl,
-                    title: filename,
-                    mode: 'modal',
-                    autoplay: true,
-                    loader: 'ring',
-                    theme: { accent: '#e07820', accent2: '#ffaa55' }
-                });
+        function openPreviewByIdx(idx) {
+            _shareIdx = idx;
+            const f = _shareFiles[idx];
+            if (f) showPreview(f);
+        }
+
+        function showPreview(f) {
+            const streamUrl = buildStreamUrl(f);
+            const apiViewUrl = buildApiViewUrl(f);
+            const baseName = f.name.split('/').pop();
+            const navBtns = '<div style="text-align:center;margin-top:12px;">' +
+                '<button class="action-btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
+                '<button class="action-btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
+
+            document.getElementById('viewTitle').textContent = baseName;
+
+            if (f.type === 'image') {
+                document.getElementById('viewBody').innerHTML =
+                    '<div style="text-align:center;padding:8px;">' +
+                    '<img src="' + apiViewUrl + '" style="max-width:100%;max-height:70vh;object-fit:contain;" alt="' + escapeHtml(baseName) + '">' +
+                    '</div>' + navBtns;
+                document.getElementById('viewModal').style.display = 'block';
                 return;
             }
-
-            if (type === 'audio') {
-                csa.player({
-                    src: streamUrl,
-                    title: filename,
-                    mode: 'modal',
-                    autoplay: true,
-                    loader: 'ring',
-                    theme: { accent: '#e07820', accent2: '#ffaa55' }
-                });
+            if (f.type === 'video' || f.type === 'audio') {
+                const ext = f.name.split('.').pop().toLowerCase();
+                let playerHtml;
+                if (ext === 'm3u8') {
+                    playerHtml = '<video id="hlsPlayer" controls autoplay playsinline style="width:100%;max-height:70vh;background:#000;"></video>' +
+                        '<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"><\/script>' +
+                        '<script>(function(){var v=document.getElementById(\"hlsPlayer\");if(Hls.isSupported()){var h=new Hls();h.loadSource(\"' + streamUrl + '\");h.attachMedia(v);v.play().catch(()=>{});}else if(v.canPlayType(\"application/vnd.apple.mpegurl\")){v.src=\"' + streamUrl + '\";v.play().catch(()=>{});}v.addEventListener(\"ended\",function(){advancePreview(1);});})();<\/script>';
+                } else {
+                    const tag = f.type === 'audio' ? 'audio' : 'video';
+                    playerHtml = '<' + tag + ' controls autoplay playsinline style="width:100%;max-height:70vh;" onended="advancePreview(1)"><source src="' + streamUrl + '"></' + tag + '>';
+                }
+                document.getElementById('viewBody').innerHTML = playerHtml + navBtns;
+                document.getElementById('viewModal').style.display = 'block';
                 return;
             }
-
-            if (type === 'text') {
-                fetch(rawUrl).then(r => r.text()).then(c => {
-                    viewBody.innerHTML = '<pre style="background:#fafafa;padding:16px;border-radius:4px;border:1px solid #e0e0e0;font-family:monospace;font-size:13px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(c) + '</pre>';
+            if (f.type === 'text') {
+                fetch(buildRawUrl(f)).then(r => r.text()).then(c => {
+                    document.getElementById('viewBody').innerHTML =
+                        '<pre style="background:#fafafa;padding:16px;border-radius:4px;border:1px solid #e0e0e0;font-family:monospace;font-size:13px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(c) + '</pre>';
                     document.getElementById('viewModal').style.display = 'block';
                 });
                 return;
             }
+        }
 
-            if (type === 'image') {
-                viewBody.innerHTML = '<div class="media-viewer"><img src="' + rawUrl + '" alt="' + escapeHtml(filename) + '"></div>';
-                document.getElementById('viewModal').style.display = 'block';
+        function advancePreview(dir) {
+            if (!_shareFiles.length) return;
+            const previewable = ['image','video','audio','text'];
+            let next = _shareIdx + dir;
+            while (next >= 0 && next < _shareFiles.length) {
+                if (previewable.includes(_shareFiles[next].type)) break;
+                next += dir;
             }
-        }
-
-        function closeModal() {
-            document.getElementById('viewModal').style.display = 'none';
-        }
-        window.onclick = function(e) { if (e.target.classList.contains('modal')) closeModal(); };
-
-        function showToast(msg) {
-            const t = document.createElement('div');
-            t.className = 'toast success';
-            t.textContent = msg;
-            document.body.appendChild(t);
-            setTimeout(() => t.remove(), 3000);
-        }
-
-        function escapeHtml(text) {
-            const d = document.createElement('div');
-            d.textContent = text;
-            return d.innerHTML;
-        }
-
-        function formatFileSize(bytes) {
-            if (bytes === 0) return '0 B';
-            if (bytes < 1024) return bytes + ' B';
-            const units = ['KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
-            let i = 0;
-            let size = bytes / 1024;
-            while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
-            return size.toFixed(2) + ' ' + units[i];
+            if (next < 0 || next >= _shareFiles.length) return;
+            _shareIdx = next;
+            showPreview(_shareFiles[next]);
         }
 
         loadPublicFiles();

@@ -55,10 +55,22 @@ func StartSFTPServer() {
 
 	sshConfig := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			// Admin check (plain-text password from config)
 			if c.User() == Cfg.Username && string(pass) == Cfg.Password {
 				return &ssh.Permissions{
 					Extensions: map[string]string{
-						"user": c.User(),
+						"user":      c.User(),
+						"user_uuid": "", // empty = admin
+					},
+				}, nil
+			}
+			// Sub-user check (bcrypt hash from user DB)
+			u := GetUserByUsername(c.User())
+			if u != nil && u.IsActive && CheckPassword(u.PasswordHash, string(pass)) {
+				return &ssh.Permissions{
+					Extensions: map[string]string{
+						"user":      c.User(),
+						"user_uuid": u.UUID,
 					},
 				}, nil
 			}
@@ -101,6 +113,11 @@ func handleSFTPConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
 	log.Printf("[SFTP] Authenticated user %q from %s", sshConn.User(), remoteAddr)
 	go ssh.DiscardRequests(reqs)
 
+	userUUID := ""
+	if sshConn.Permissions != nil {
+		userUUID = sshConn.Permissions.Extensions["user_uuid"]
+	}
+
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
 			newChan.Reject(ssh.UnknownChannelType, "unknown channel type")
@@ -123,7 +140,7 @@ func handleSFTPConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
 						subsystem := string(req.Payload[4:])
 						if subsystem == "sftp" {
 							req.Reply(true, nil)
-							handleSFTPSession(ch)
+							handleSFTPSession(ch, userUUID)
 							return
 						}
 					}
@@ -138,8 +155,13 @@ func handleSFTPConn(conn net.Conn, sshConfig *ssh.ServerConfig) {
 	}
 }
 
-func handleSFTPSession(ch ssh.Channel) {
-	root := &sftpHandler{root: PublicDir}
+func handleSFTPSession(ch ssh.Channel, userUUID string) {
+	rootDir := PublicDir
+	if userUUID != "" {
+		rootDir = UserPublicDir(userUUID)
+		EnsureUserDir(userUUID)
+	}
+	root := &sftpHandler{root: rootDir}
 	server := sftp.NewRequestServer(ch, sftp.Handlers{
 		FileGet:  root,
 		FilePut:  root,

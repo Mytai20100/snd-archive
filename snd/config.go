@@ -1,9 +1,10 @@
 package snd
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,12 +20,16 @@ func LoadConfig() Config {
 		UseHTTPS:            true,
 		CertFile:            "server.crt",
 		KeyFile:             "server.key",
-		APIToken:            GenerateRandomToken(82),
+		APIToken:            GenerateRandomToken(32),
 		Enable2FA:           false,
 		DiscordWebhook:      "",
 		SFTPEnabled:         false,
 		SFTPPort:            "2022",
 		SFTPKeyPath:         "sftp_key.pem",
+		FTPEnabled:          false,
+		FTPPort:             "2121",
+		FTPPassivePortStart: 50000,
+		FTPPassivePortEnd:   50100,
 		CloudflareChallenge: false,
 		EmbedTitle:          "",
 		EmbedDescription:    "File sharing powered by servernotdie",
@@ -44,13 +49,14 @@ func LoadConfig() Config {
 	return cfg
 }
 
-func GenerateRandomToken(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+// GenerateRandomToken produces a cryptographically secure hex token.
+// byteLen specifies how many random bytes; returned string is byteLen*2 hex chars.
+func GenerateRandomToken(byteLen int) string {
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
 	}
-	return string(b)
+	return hex.EncodeToString(b)
 }
 
 func GetProtocol() string {
@@ -62,9 +68,15 @@ func GetProtocol() string {
 
 func Init() {
 	Cfg = LoadConfig()
+	LoadUsers()
 	LoadDownloadCounts()
 	LoadFilePermissions()
 	LoadFolderPermissions()
 	LoadAccessLogs()
 	UpdateStats()
+	LoadNodes()
+	LoadDDoSConfig()
+	LoadTrafficStats()
+	LoadSiteSettings()
+	LoadIconConfig()
 }

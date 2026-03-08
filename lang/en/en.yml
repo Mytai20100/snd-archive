@@ -1,0 +1,71 @@
+# ServerNotDie Language File - English (en)
+# Place this file in lang/en/en.yml
+
+# Navigation
+nav_login: "Login"
+nav_logout: "Logout"
+nav_admin: "Admin"
+nav_my_files: "My Files"
+nav_my_account: "My Account"
+nav_new_folder: "New Folder"
+
+# File operations
+file_upload: "Upload"
+file_download: "Download"
+file_delete: "Delete"
+file_rename: "Rename"
+file_duplicate: "Duplicate"
+file_copy_link: "Copy link"
+file_make_public: "Make Public"
+file_make_private: "Make Private"
+file_view: "View"
+file_play: "Play"
+file_edit: "Edit"
+
+# File status
+status_public: "Public"
+status_private: "Private"
+status_uploading: "Uploading..."
+status_loading: "Loading..."
+
+# Bulk actions
+bulk_zip_download: "ZIP Download"
+bulk_make_public: "Make Public"
+bulk_make_private: "Make Private"
+bulk_delete: "Delete"
+bulk_deselect: "Deselect All"
+
+# Messages
+msg_copied: "Link copied!"
+msg_deleted: "Deleted"
+msg_renamed: "Renamed"
+msg_uploaded: "Uploaded"
+msg_error: "An error occurred"
+msg_confirm_delete: "Are you sure you want to delete?"
+msg_confirm_delete_files: "Delete selected files? This cannot be undone."
+
+# Share page
+share_public_files: "Public Files"
+share_search_placeholder: "Search public files..."
+share_no_files: "No public files available"
+share_no_files_sub: "Files marked as public by the administrator will appear here."
+
+# Settings
+settings_title: "Settings"
+settings_background_url: "Background URL"
+settings_background_music: "Background Music URL"
+settings_language: "Language"
+settings_show_direct_links: "Show Direct Links"
+settings_save: "Save Settings"
+settings_saved: "Settings saved"
+
+# Account
+account_username: "Username"
+account_email: "Email"
+account_api_token: "API Token"
+account_storage_used: "Storage Used"
+account_storage_limit: "Limit"
+account_change_password: "Change Password"
+account_current_password: "Current Password"
+account_new_password: "New Password"
+account_confirm_password: "Confirm New Password"

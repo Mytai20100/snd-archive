@@ -1,0 +1,74 @@
+# Icon Configuration for snd-archive
+# Maps file extensions and types to SVG icon files in this directory.
+# Format: extension: icon_filename (without .svg)
+# You can change any mapping to point to a different icon file.
+
+# ── Type-level defaults ──────────────────────────────────────────
+type_default:   file
+type_folder:    folder
+type_image:     image
+type_video:     video
+type_audio:     audio
+type_text:      text
+type_archive:   archive
+type_document:  document
+type_font:      font
+type_database:  database
+
+# ── Extension overrides ──────────────────────────────────────────
+extensions:
+  # Images
+  .jpg:    image
+  .jpeg:   image
+  .png:    image
+  .gif:    image
+  .webp:   image
+  .svg:    image
+  .bmp:    image
+  .avif:   image
+  # Video
+  .mp4:    video
+  .webm:   video
+  .mkv:    video
+  .avi:    video
+  .mov:    video
+  .m3u8:   video
+  .ts:     video
+  # Audio
+  .mp3:    audio
+  .wav:    audio
+  .flac:   audio
+  .aac:    audio
+  .ogg:    audio
+  .m4a:    audio
+  # Archives
+  .zip:    archive
+  .tar:    archive
+  .gz:     archive
+  .7z:     archive
+  .rar:    archive
+  # Documents
+  .pdf:    document
+  .doc:    document
+  .docx:   document
+  .xls:    document
+  .xlsx:   document
+  .ppt:    document
+  .pptx:   document
+  # Code/Text
+  .go:     code
+  .py:     code
+  .js:     code
+  .ts:     code
+  .html:   code
+  .css:    code
+  .json:   code
+  .yaml:   code
+  .yml:    code
+  .sh:     code
+  .md:     text
+  .txt:    text
+  # Database
+  .db:     database
+  .sqlite: database
+  .sql:    database

@@ -41,17 +41,6 @@ func UpdateStats() {
 	GlobalStatsMu.Unlock()
 }
 
-func IsAuthenticated(r *http.Request) bool {
-	cookie, err := r.Cookie("session")
-	if err != nil || cookie.Value == "" {
-		return false
-	}
-	SessionMu.RLock()
-	session, exists := Sessions[cookie.Value]
-	SessionMu.RUnlock()
-	return exists && time.Now().Before(session.ExpiresAt)
-}
-
 func GetClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
@@ -183,6 +172,10 @@ func SaveAccessLogs() {
 
 func GetFileType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
+	// HLS/transport stream — check before text to avoid .m3u8 being missed
+	if ext == ".m3u8" {
+		return "video"
+	}
 	if ext == "" {
 		noExtTextFiles := []string{
 			"makefile", "dockerfile", "rakefile", "gemfile", "procfile",
@@ -214,7 +207,7 @@ func GetFileType(filename string) string {
 		}
 	}
 	imageExts := []string{
-		".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico",
+		".jpg", ".jpeg", ".jfif", ".jpe", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico",
 		".tif", ".tiff", ".psd", ".ai", ".eps", ".raw", ".heic", ".avif",
 	}
 	for _, e := range imageExts {
@@ -224,7 +217,7 @@ func GetFileType(filename string) string {
 	}
 	videoExts := []string{
 		".mp4", ".webm", ".ogg", ".mov", ".avi", ".mkv", ".flv", ".wmv",
-		".mpg", ".mpeg", ".3gp", ".vob", ".ts", ".m2ts",
+		".mpg", ".mpeg", ".3gp", ".vob", ".ts", ".m2ts", ".m3u8",
 	}
 	for _, e := range videoExts {
 		if ext == e {

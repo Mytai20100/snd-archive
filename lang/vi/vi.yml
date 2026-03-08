@@ -1,0 +1,71 @@
+# ServerNotDie Language File - Tiếng Việt (vi)
+# Đặt file này vào lang/vi/vi.yml
+
+# Điều hướng
+nav_login: "Đăng nhập"
+nav_logout: "Đăng xuất"
+nav_admin: "Quản trị"
+nav_my_files: "File của tôi"
+nav_my_account: "Tài khoản"
+nav_new_folder: "Thư mục mới"
+
+# Thao tác file
+file_upload: "Tải lên"
+file_download: "Tải xuống"
+file_delete: "Xóa"
+file_rename: "Đổi tên"
+file_duplicate: "Nhân bản"
+file_copy_link: "Sao chép link"
+file_make_public: "Công khai"
+file_make_private: "Riêng tư"
+file_view: "Xem"
+file_play: "Phát"
+file_edit: "Chỉnh sửa"
+
+# Trạng thái
+status_public: "Công khai"
+status_private: "Riêng tư"
+status_uploading: "Đang tải lên..."
+status_loading: "Đang tải..."
+
+# Thao tác hàng loạt
+bulk_zip_download: "Tải ZIP"
+bulk_make_public: "Công khai"
+bulk_make_private: "Riêng tư"
+bulk_delete: "Xóa"
+bulk_deselect: "Bỏ chọn tất cả"
+
+# Thông báo
+msg_copied: "Đã sao chép link!"
+msg_deleted: "Đã xóa"
+msg_renamed: "Đã đổi tên"
+msg_uploaded: "Đã tải lên"
+msg_error: "Đã xảy ra lỗi"
+msg_confirm_delete: "Bạn có chắc muốn xóa không?"
+msg_confirm_delete_files: "Xóa file đã chọn? Không thể hoàn tác."
+
+# Trang chia sẻ
+share_public_files: "File công khai"
+share_search_placeholder: "Tìm kiếm file công khai..."
+share_no_files: "Không có file công khai"
+share_no_files_sub: "File được đánh dấu công khai bởi quản trị viên sẽ xuất hiện tại đây."
+
+# Cài đặt
+settings_title: "Cài đặt"
+settings_background_url: "URL hình nền"
+settings_background_music: "URL nhạc nền"
+settings_language: "Ngôn ngữ"
+settings_show_direct_links: "Hiện link trực tiếp"
+settings_save: "Lưu cài đặt"
+settings_saved: "Đã lưu cài đặt"
+
+# Tài khoản
+account_username: "Tên đăng nhập"
+account_email: "Email"
+account_api_token: "API Token"
+account_storage_used: "Đã dùng"
+account_storage_limit: "Giới hạn"
+account_change_password: "Đổi mật khẩu"
+account_current_password: "Mật khẩu hiện tại"
+account_new_password: "Mật khẩu mới"
+account_confirm_password: "Xác nhận mật khẩu mới"
