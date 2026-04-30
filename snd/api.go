@@ -75,7 +75,7 @@ func RequireToken(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireTokenOrAuth allows public files, token holders (admin or user), or logged-in sessions.
+// RequireTokenOrAuth allows public files (with valid pt= public token), token holders (admin or user), or logged-in sessions.
 func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var fullPath string
@@ -98,10 +98,6 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			fullPath = r.URL.Path
 		}
 
-		// SECURITY FIX: use full relative path as key, matching how HandleSetPermission stores it.
-		// Previously used filepath.Base() which caused files in subfolders to never match their
-		// stored permission key, making them always fall through to session-required check.
-		// Also: a file set to IsPublic=false must be treated as private — existence alone is not enough.
 		folderPath := filepath.Dir(fullPath)
 		if folderPath == "." {
 			folderPath = ""
@@ -112,15 +108,7 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 		folderPerm, folderExists := FolderPermissions[folderPath]
 		PermissionMu.RUnlock()
 
-		// Public only if explicitly set to IsPublic=true.
-		// If set to false (private), block even if entry exists.
-		fileIsPublic := fileExists && filePerm.IsPublic
-		folderIsPublic := folderExists && folderPerm.IsPublic
-		if fileIsPublic || folderIsPublic {
-			handler(w, r)
-			return
-		}
-
+		// Logged-in or API-token holders bypass public-token check entirely.
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			token = r.Header.Get("X-API-Token")
@@ -129,9 +117,35 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			handler(w, r)
 			return
 		}
-
 		session := getValidSession(r)
 		if session != nil {
+			handler(w, r)
+			return
+		}
+
+		// Anonymous access: require matching public token (pt= param).
+		// This prevents guessing public URLs without the token.
+		pt := r.URL.Query().Get("pt")
+
+		fileIsPublic := fileExists && filePerm.IsPublic
+		folderIsPublic := folderExists && folderPerm.IsPublic
+
+		if fileIsPublic && pt != "" && filePerm.PublicToken != "" && tokenEqual(pt, filePerm.PublicToken) {
+			handler(w, r)
+			return
+		}
+		if folderIsPublic && pt != "" && folderPerm.PublicToken != "" && tokenEqual(pt, folderPerm.PublicToken) {
+			handler(w, r)
+			return
+		}
+
+		// Fallback: if a public file somehow has no PublicToken set (legacy data),
+		// allow access so existing shares keep working. New shares always get a token.
+		if fileIsPublic && filePerm.PublicToken == "" {
+			handler(w, r)
+			return
+		}
+		if folderIsPublic && folderPerm.PublicToken == "" {
 			handler(w, r)
 			return
 		}

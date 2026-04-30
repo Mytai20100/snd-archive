@@ -126,29 +126,46 @@ func GetUserByToken(token string) *UserAccount {
 
 // HandleListUsers → GET /admin/users  (admin only)
 func HandleListUsers(w http.ResponseWriter, r *http.Request) {
+	// M2 FIX: Only the true admin (no UserUUID) may see API tokens in the list.
+	// Sub-users with IsAdmin=true get a redacted placeholder.
+	callerSession := GetSessionInfo(r)
+	callerIsTrueAdmin := callerSession != nil && callerSession.IsAdmin && callerSession.UserUUID == ""
+
+	// Snapshot the user list under a short read-lock, then release before
+	// doing any filesystem work so we never drop/re-acquire the lock mid-range.
 	UsersMu.RLock()
-	list := make([]map[string]interface{}, 0, len(Users))
+	snapshot := make([]*UserAccount, 0, len(Users))
 	for _, u := range Users {
+		snapshot = append(snapshot, u)
+	}
+	UsersMu.RUnlock()
+
+	list := make([]map[string]interface{}, 0, len(snapshot))
+	for _, u := range snapshot {
+		// CalcUserStorage reads the filesystem – do it outside any lock.
 		used := CalcUserStorage(u.UUID)
-		UsersMu.RUnlock()
 		UsersMu.Lock()
 		u.UsedStorage = used
 		UsersMu.Unlock()
-		UsersMu.RLock()
+
+		tokenValue := "[redacted]"
+		if callerIsTrueAdmin {
+			tokenValue = u.APIToken
+		}
+
 		list = append(list, map[string]interface{}{
 			"uuid":          u.UUID,
 			"username":      u.Username,
 			"email":         u.Email,
-			"api_token":     u.APIToken,
+			"api_token":     tokenValue,
 			"storage_limit": u.StorageLimit,
-			"used_storage":  u.UsedStorage,
+			"used_storage":  used, // use local var, not u.UsedStorage (avoid stale read)
 			"request_count": u.RequestCount,
 			"created_at":    u.CreatedAt.Format("2006-01-02 15:04:05"),
 			"is_active":     u.IsActive,
 			"is_admin":      u.IsAdmin,
 		})
 	}
-	UsersMu.RUnlock()
 	go SaveUsers()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(list)
@@ -370,8 +387,37 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 
 	isPublic := (filePublic && filePerm.IsPublic) || (folderPublic && folderPerm.IsPublic)
 
-	if !isPublic {
-		// Check token: must be this user's own token OR the admin token
+	if isPublic {
+		// Public file: anonymous access requires matching pt= public token.
+		// If the file/folder has a PublicToken set, enforce it.
+		// Legacy entries with no PublicToken are allowed through for backward compat.
+		pt := r.URL.Query().Get("pt")
+		fileHasToken := filePublic && filePerm.IsPublic && filePerm.PublicToken != ""
+		folderHasToken := folderPublic && folderPerm.IsPublic && folderPerm.PublicToken != ""
+
+		// If neither the file nor the folder has a PublicToken, allow (legacy share).
+		needsTokenCheck := fileHasToken || folderHasToken
+		if needsTokenCheck {
+			ptOK := (fileHasToken && tokenEqual(pt, filePerm.PublicToken)) ||
+				(folderHasToken && tokenEqual(pt, folderPerm.PublicToken))
+			if !ptOK {
+				// Still allow authenticated sessions / API tokens
+				token := r.URL.Query().Get("token")
+				if token == "" {
+					token = r.Header.Get("X-API-Token")
+				}
+				tokenOK := token == user.APIToken || token == Cfg.APIToken
+				if !tokenOK {
+					session := getValidSession(r)
+					if session == nil || (!session.IsAdmin && session.UserUUID != uuid) {
+						http.Error(w, "Unauthorized", http.StatusUnauthorized)
+						return
+					}
+				}
+			}
+		}
+	} else {
+		// Private file: require API token or session
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			token = r.Header.Get("X-API-Token")

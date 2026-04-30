@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -14,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"snd-archive/snd"
@@ -70,16 +74,100 @@ func generateSelfSignedCert(certFile, keyFile string) error {
 
 func main() {
 	// ─── Flags ────────────────────────────────────────────────────────────────
-	debug := flag.Bool("debug", false, "Enable debug logging")
+	debug      := flag.Bool("debug", false, "Enable debug logging")
 	configFile := flag.String("config", "config.yml", "Path to config file")
-	usersFile := flag.String("users", "users.yml", "Path to users file")
-	publicDir := flag.String("dir", "public", "Path to public files directory")
+	usersFile  := flag.String("users", "users.yml", "Path to users file")
+	publicDir  := flag.String("dir", "public", "Path to public files directory")
+	// Child-node quick-connect flags
+	cfMode    := flag.Bool("cf", false, "Run as child node (connect to main node)")
+	cfKey     := flag.String("key", "", "Private key (AES-256) for node authentication")
+	cfNode    := flag.String("node", "", "Main node URL (e.g. https://example.com or 192.168.1.9:8080)")
 	flag.Parse()
+
+	// ─── Child node quick-connect mode ───────────────────────────────────────
+	if *cfMode {
+		if *cfKey == "" || *cfNode == "" {
+			fmt.Fprintln(os.Stderr, "[CF] --key and --node are required with --cf")
+			os.Exit(1)
+		}
+
+		// Load config NOW so snd.Cfg.IP / SiteName are populated before we
+		// build the registration payload (snd.Init() is called below for the
+		// normal server path; in CF mode we call it early here).
+		snd.ConfigFile = *configFile
+		snd.UsersFile  = *usersFile
+		snd.PublicDir  = *publicDir
+		snd.Init()
+
+		nodeURL := *cfNode
+		// Normalise URL scheme
+		if len(nodeURL) > 0 && nodeURL[:4] != "http" {
+			nodeURL = "http://" + nodeURL
+		}
+		connectURL := strings.TrimRight(nodeURL, "/") + "/api/v9/connect"
+		fmt.Printf("[CF] Connecting to main node at %s ...\n", connectURL)
+
+		// Use configured IP; fall back to a non-empty placeholder so the
+		// main node never rejects us with "bad request / NodeURL empty".
+		selfIP := snd.Cfg.IP
+		if selfIP == "" || selfIP == "0.0.0.0" {
+			selfIP = "this-node"
+		}
+
+		payload, _ := json.Marshal(map[string]string{
+			"key":  *cfKey,
+			"node": selfIP,
+			"name": snd.Cfg.SiteName,
+		})
+
+		resp, err := http.Post(connectURL, "application/json", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[CF] Connection failed: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "[CF] Main node rejected connection (status %d)\n", resp.StatusCode)
+			os.Exit(1)
+		}
+
+		var reply struct {
+			PublicKey string `json:"public_key"`
+			Status    string `json:"status"`
+		}
+		json.NewDecoder(resp.Body).Decode(&reply)
+
+		// Persist public key into config so auto-connect works on restart
+		snd.Cfg.NodePrivateKey = *cfKey
+		snd.Cfg.NodePublicKey  = reply.PublicKey
+		snd.SaveConfig()
+
+		fmt.Printf("[CF] Connected! Public key received and saved. Status: %s\n", reply.Status)
+		fmt.Println("[CF] This node will auto-connect on every restart.")
+		return
+	}
 
 	snd.Debug = *debug
 	snd.ConfigFile = *configFile
 	snd.UsersFile = *usersFile
 	snd.PublicDir = *publicDir
+
+	// Set WorkDir to the directory containing the binary
+	if exePath, err := os.Executable(); err == nil {
+		snd.WorkDir = filepath.Dir(exePath)
+	} else {
+		// fallback: use current working directory
+		if cwd, err := os.Getwd(); err == nil {
+			snd.WorkDir = cwd
+		}
+	}
+
+	// Auto-connect to main node on startup if keys are configured
+	if snd.Cfg.NodePrivateKey != "" && snd.Cfg.NodePublicKey == "" {
+		// keys set but no public key yet — try connecting
+		log.Printf("[CF] Node private key configured — attempting auto-connect...")
+	}
 
 	// ─── Init ─────────────────────────────────────────────────────────────────
 	snd.Init()

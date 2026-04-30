@@ -8,6 +8,7 @@ nav_admin: "Admin"
 nav_my_files: "My Files"
 nav_my_account: "My Account"
 nav_new_folder: "New Folder"
+nav_download_url: "Download URL"
 
 # File operations
 file_upload: "Upload"
@@ -21,6 +22,11 @@ file_make_private: "Make Private"
 file_view: "View"
 file_play: "Play"
 file_edit: "Edit"
+file_extract: "Extract"
+file_download_zip: "Download as ZIP"
+file_properties: "Properties"
+file_rename_folder: "Rename Folder"
+file_delete_folder: "Delete Folder"
 
 # File status
 status_public: "Public"
@@ -28,12 +34,80 @@ status_private: "Private"
 status_uploading: "Uploading..."
 status_loading: "Loading..."
 
+# Upload area
+upload_drop_text: "Drop files or click to upload (multiple files supported)"
+
 # Bulk actions
 bulk_zip_download: "ZIP Download"
 bulk_make_public: "Make Public"
 bulk_make_private: "Make Private"
 bulk_delete: "Delete"
 bulk_deselect: "Deselect All"
+
+# Toast messages - success
+toast_copied: "Link copied!"
+toast_deleted: "Deleted"
+toast_renamed: "Renamed"
+toast_uploaded: "Uploaded"
+toast_saved: "Saved"
+toast_logged_out: "Logged out"
+toast_token_copied: "Token copied!"
+toast_settings_saved: "Settings saved"
+toast_extracted: "Extracted successfully"
+toast_download_started: "Download started — server is fetching the file"
+toast_downloaded_zip: "Downloaded as ZIP"
+toast_folder_renamed: "Folder renamed"
+toast_password_changed: "Password changed"
+toast_node_saved: "Node saved"
+toast_primary_node_set: "Primary node set"
+toast_primary_cleared: "Primary cleared"
+toast_user_deleted: "User deleted"
+toast_ddos_saved: "DDoS config saved"
+toast_ip_unbanned: "IP unbanned"
+toast_ip_banned: "IP banned"
+
+# Toast messages - error
+toast_error: "An error occurred"
+toast_error_copy: "Failed to copy"
+toast_error_copy_link: "Failed to copy link"
+toast_error_delete: "Failed to delete"
+toast_error_rename: "Failed to rename"
+toast_error_rename_folder: "Failed to rename folder"
+toast_error_duplicate: "Failed to duplicate"
+toast_error_zip: "Failed to create ZIP"
+toast_error_save: "Failed to save"
+toast_error_permission: "Failed to update permission"
+toast_error_extract: "Extract failed"
+toast_error_read_zip: "Failed to read ZIP"
+toast_error_create_folder: "Failed to create folder"
+toast_error_delete_folder: "Failed to delete folder"
+toast_error_settings: "Failed to save settings"
+toast_error_load_settings: "Failed to load settings"
+toast_error_download: "Download failed"
+toast_error_network: "Network error"
+toast_error_delete_user: "Failed to delete user"
+toast_error_save_node: "Failed to save node"
+toast_error_ddos: "Failed to save DDoS config"
+toast_login_required: "Login required"
+toast_please_login: "Please login to upload files"
+toast_invalid_folder: "Invalid folder name"
+
+# Confirm dialogs
+confirm_delete_file: "Delete {filename}?"
+confirm_delete_folder: "Delete folder \"{name}\" and all contents?"
+confirm_delete_user: "Delete user \"{username}\"? This cannot be undone."
+confirm_delete_files_also: "Also delete all files of \"{username}\"?"
+confirm_delete_node: "Delete this node?"
+confirm_save_user: "Save changes to \"{username}\"?"
+
+# Validation messages
+validation_enter_name: "Please enter a name"
+validation_enter_folder_name: "Please enter a folder name"
+validation_select_files: "Please select files"
+validation_username_required: "Username required"
+validation_password_required: "Password required for new users"
+validation_fields_required: "All fields are required."
+validation_passwords_no_match: "Passwords do not match."
 
 # Messages
 msg_copied: "Link copied!"
@@ -43,6 +117,27 @@ msg_uploaded: "Uploaded"
 msg_error: "An error occurred"
 msg_confirm_delete: "Are you sure you want to delete?"
 msg_confirm_delete_files: "Delete selected files? This cannot be undone."
+
+# Modal titles
+modal_view_file: "View File"
+modal_edit_file: "Edit File"
+modal_rename: "Rename"
+modal_properties: "Properties"
+modal_create_folder: "Create Folder"
+modal_download_url: "Download from URL"
+
+# Modal buttons
+modal_cancel: "Cancel"
+modal_save: "Save"
+modal_rename_btn: "Rename"
+modal_create: "Create"
+modal_download: "Download"
+modal_close: "Close"
+
+# Download URL modal
+download_url_desc: "Server will fetch the file from this URL and save it to the current folder."
+download_url_label: "URL"
+download_url_placeholder: "https://example.com/file.zip"
 
 # Share page
 share_public_files: "Public Files"
@@ -69,3 +164,35 @@ account_change_password: "Change Password"
 account_current_password: "Current Password"
 account_new_password: "New Password"
 account_confirm_password: "Confirm New Password"
+account_save_password: "Save Password"
+account_saving: "Saving..."
+account_my_api_token: "My API Token"
+account_show: "Show"
+account_copy: "Copy"
+
+# Context menu items
+ctx_rename: "Rename"
+ctx_delete: "Delete"
+ctx_rename_folder: "Rename Folder"
+ctx_delete_folder: "Delete Folder"
+ctx_download_zip: "Download as ZIP"
+ctx_copy_link: "Copy Link"
+ctx_properties: "Properties"
+ctx_extract: "Extract"
+ctx_duplicate: "Duplicate"
+ctx_edit: "Edit"
+ctx_view: "View"
+ctx_play: "Play"
+
+# Search
+search_placeholder: "Search files..."
+search_esc_hint: "Press ESC to close"
+
+# Misc UI
+ui_selected: "selected"
+ui_root: "Root"
+ui_public: "Public"
+ui_private: "Private"
+ui_downloads: "downloads"
+ui_visibility: "Public / Private"
+

@@ -8,6 +8,7 @@ nav_admin: "Quản trị"
 nav_my_files: "File của tôi"
 nav_my_account: "Tài khoản"
 nav_new_folder: "Thư mục mới"
+nav_download_url: "Tải từ URL"
 
 # Thao tác file
 file_upload: "Tải lên"
@@ -21,12 +22,20 @@ file_make_private: "Riêng tư"
 file_view: "Xem"
 file_play: "Phát"
 file_edit: "Chỉnh sửa"
+file_extract: "Giải nén"
+file_download_zip: "Tải về dạng ZIP"
+file_properties: "Thuộc tính"
+file_rename_folder: "Đổi tên thư mục"
+file_delete_folder: "Xóa thư mục"
 
 # Trạng thái
 status_public: "Công khai"
 status_private: "Riêng tư"
 status_uploading: "Đang tải lên..."
 status_loading: "Đang tải..."
+
+# Vùng tải lên
+upload_drop_text: "Kéo thả file hoặc nhấn để tải lên (hỗ trợ nhiều file)"
 
 # Thao tác hàng loạt
 bulk_zip_download: "Tải ZIP"
@@ -35,7 +44,72 @@ bulk_make_private: "Riêng tư"
 bulk_delete: "Xóa"
 bulk_deselect: "Bỏ chọn tất cả"
 
-# Thông báo
+# Thông báo toast - thành công
+toast_copied: "Đã sao chép link!"
+toast_deleted: "Đã xóa"
+toast_renamed: "Đã đổi tên"
+toast_uploaded: "Đã tải lên"
+toast_saved: "Đã lưu"
+toast_logged_out: "Đã đăng xuất"
+toast_token_copied: "Đã sao chép token!"
+toast_settings_saved: "Đã lưu cài đặt"
+toast_extracted: "Giải nén thành công"
+toast_download_started: "Đã bắt đầu tải — máy chủ đang lấy file"
+toast_downloaded_zip: "Đã tải về dạng ZIP"
+toast_folder_renamed: "Đã đổi tên thư mục"
+toast_password_changed: "Đã đổi mật khẩu"
+toast_node_saved: "Đã lưu node"
+toast_primary_node_set: "Đã đặt node chính"
+toast_primary_cleared: "Đã xóa node chính"
+toast_user_deleted: "Đã xóa người dùng"
+toast_ddos_saved: "Đã lưu cấu hình DDoS"
+toast_ip_unbanned: "Đã bỏ chặn IP"
+toast_ip_banned: "Đã chặn IP"
+
+# Thông báo toast - lỗi
+toast_error: "Đã xảy ra lỗi"
+toast_error_copy: "Sao chép thất bại"
+toast_error_copy_link: "Sao chép link thất bại"
+toast_error_delete: "Xóa thất bại"
+toast_error_rename: "Đổi tên thất bại"
+toast_error_rename_folder: "Đổi tên thư mục thất bại"
+toast_error_duplicate: "Nhân bản thất bại"
+toast_error_zip: "Tạo ZIP thất bại"
+toast_error_save: "Lưu thất bại"
+toast_error_permission: "Cập nhật quyền thất bại"
+toast_error_extract: "Giải nén thất bại"
+toast_error_read_zip: "Đọc ZIP thất bại"
+toast_error_create_folder: "Tạo thư mục thất bại"
+toast_error_delete_folder: "Xóa thư mục thất bại"
+toast_error_settings: "Lưu cài đặt thất bại"
+toast_error_load_settings: "Tải cài đặt thất bại"
+toast_error_download: "Tải xuống thất bại"
+toast_error_network: "Lỗi mạng"
+toast_error_delete_user: "Xóa người dùng thất bại"
+toast_error_save_node: "Lưu node thất bại"
+toast_error_ddos: "Lưu cấu hình DDoS thất bại"
+toast_login_required: "Yêu cầu đăng nhập"
+toast_please_login: "Vui lòng đăng nhập để tải lên"
+toast_invalid_folder: "Tên thư mục không hợp lệ"
+
+# Hộp thoại xác nhận
+confirm_delete_file: "Xóa {filename}?"
+confirm_delete_folder: "Xóa thư mục \"{name}\" và toàn bộ nội dung?"
+confirm_delete_user: "Xóa người dùng \"{username}\"? Không thể hoàn tác."
+confirm_delete_files_also: "Có xóa toàn bộ file của \"{username}\" không?"
+confirm_delete_node: "Xóa node này?"
+confirm_save_user: "Lưu thay đổi cho \"{username}\"?"
+
+# Xác thực
+validation_enter_name: "Vui lòng nhập tên"
+validation_enter_folder_name: "Vui lòng nhập tên thư mục"
+validation_select_files: "Vui lòng chọn file"
+validation_username_required: "Yêu cầu tên đăng nhập"
+validation_password_required: "Yêu cầu mật khẩu cho người dùng mới"
+validation_fields_required: "Vui lòng điền đầy đủ các trường."
+validation_passwords_no_match: "Mật khẩu không khớp."
+
+# Thông báo chung
 msg_copied: "Đã sao chép link!"
 msg_deleted: "Đã xóa"
 msg_renamed: "Đã đổi tên"
@@ -43,6 +117,27 @@ msg_uploaded: "Đã tải lên"
 msg_error: "Đã xảy ra lỗi"
 msg_confirm_delete: "Bạn có chắc muốn xóa không?"
 msg_confirm_delete_files: "Xóa file đã chọn? Không thể hoàn tác."
+
+# Tiêu đề modal
+modal_view_file: "Xem file"
+modal_edit_file: "Chỉnh sửa file"
+modal_rename: "Đổi tên"
+modal_properties: "Thuộc tính"
+modal_create_folder: "Tạo thư mục"
+modal_download_url: "Tải từ URL"
+
+# Nút modal
+modal_cancel: "Hủy"
+modal_save: "Lưu"
+modal_rename_btn: "Đổi tên"
+modal_create: "Tạo"
+modal_download: "Tải xuống"
+modal_close: "Đóng"
+
+# Modal tải từ URL
+download_url_desc: "Máy chủ sẽ tải file từ URL này và lưu vào thư mục hiện tại."
+download_url_label: "URL"
+download_url_placeholder: "https://example.com/file.zip"
 
 # Trang chia sẻ
 share_public_files: "File công khai"
@@ -69,3 +164,35 @@ account_change_password: "Đổi mật khẩu"
 account_current_password: "Mật khẩu hiện tại"
 account_new_password: "Mật khẩu mới"
 account_confirm_password: "Xác nhận mật khẩu mới"
+account_save_password: "Lưu mật khẩu"
+account_saving: "Đang lưu..."
+account_my_api_token: "API Token của tôi"
+account_show: "Hiện"
+account_copy: "Sao chép"
+
+# Menu ngữ cảnh
+ctx_rename: "Đổi tên"
+ctx_delete: "Xóa"
+ctx_rename_folder: "Đổi tên thư mục"
+ctx_delete_folder: "Xóa thư mục"
+ctx_download_zip: "Tải về dạng ZIP"
+ctx_copy_link: "Sao chép link"
+ctx_properties: "Thuộc tính"
+ctx_extract: "Giải nén"
+ctx_duplicate: "Nhân bản"
+ctx_edit: "Chỉnh sửa"
+ctx_view: "Xem"
+ctx_play: "Phát"
+
+# Tìm kiếm
+search_placeholder: "Tìm kiếm file..."
+search_esc_hint: "Nhấn ESC để đóng"
+
+# Giao diện chung
+ui_selected: "đã chọn"
+ui_root: "Gốc"
+ui_public: "Công khai"
+ui_private: "Riêng tư"
+ui_downloads: "lượt tải"
+ui_visibility: "Công khai / Riêng tư"
+

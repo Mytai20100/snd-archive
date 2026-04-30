@@ -3,6 +3,7 @@ package snd
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -13,26 +14,60 @@ import (
 
 func FormatBytes(bytes int64) string {
 	const unit = 1024
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
 	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
+	val := float64(bytes)
+	exp := 0
+	for val >= unit && exp < len(units)-1 {
+		val /= unit
 		exp++
 	}
-	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	// If value rounds to >= 1000, promote to next unit to avoid e.g. "1002.89 KB"
+	if val >= 999.995 && exp < len(units)-1 {
+		val /= unit
+		exp++
+	}
+	// Use up to 2 decimal places but strip trailing zeros
+	s := fmt.Sprintf("%.2f", val)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	return s + " " + units[exp]
 }
 
 func UpdateStats() {
-	files, _ := os.ReadDir(PublicDir)
 	var size int64
 	var count int64
-	for _, f := range files {
-		if !f.IsDir() {
-			info, _ := f.Info()
-			size += info.Size()
-			count++
+	// Walk recursively but skip per-user UUID subdirectories at the top level.
+	// Those are accounted for separately via CalcUserStorage.
+	topEntries, _ := os.ReadDir(PublicDir)
+	for _, entry := range topEntries {
+		if entry.IsDir() && isUUIDDir(entry.Name()) {
+			// skip user subdirs — they belong to sub-user accounts
+			continue
+		}
+		fullPath := filepath.Join(PublicDir, entry.Name())
+		if entry.IsDir() {
+			filepath.WalkDir(fullPath, func(_ string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return nil
+				}
+				info, err := d.Info()
+				if err == nil {
+					size += info.Size()
+					count++
+				}
+				return nil
+			})
+		} else {
+			info, err := entry.Info()
+			if err == nil {
+				size += info.Size()
+				count++
+			}
 		}
 	}
 	GlobalStatsMu.Lock()

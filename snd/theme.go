@@ -53,11 +53,29 @@ func ThemeSnippet(pageType string) string {
             <label class="tp-clabel">Border
                 <input type="color" id="pcBorder"  value="#e0e0e0" oninput="themeApplyPalette()">
             </label>
-            <label class="tp-clabel">Accent
+            <label class="tp-clabel">Accent / Btn
                 <input type="color" id="pcAccent"  value="#1a1a1a" oninput="themeApplyPalette()">
             </label>
-            <label class="tp-clabel">Header
+            <label class="tp-clabel">Header BG
                 <input type="color" id="pcHeader"  value="#ffffff" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Footer BG
+                <input type="color" id="pcFooterBg" value="#f5f5f5" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Footer Text
+                <input type="color" id="pcFooterText" value="#999999" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Link Color
+                <input type="color" id="pcLink"    value="#0066cc" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Input BG
+                <input type="color" id="pcInputBg" value="#ffffff" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Modal BG
+                <input type="color" id="pcModalBg" value="#ffffff" oninput="themeApplyPalette()">
+            </label>
+            <label class="tp-clabel">Progress Bar
+                <input type="color" id="pcProgress" value="#1a1a1a" oninput="themeApplyPalette()">
             </label>
         </div>
         <button class="tp-apply-btn" style="margin-top:6px" onclick="themeResetPalette()">Reset</button>
@@ -89,6 +107,20 @@ func ThemeSnippet(pageType string) string {
             </div>
             <label class="tp-tgl">
                 <input type="checkbox" id="tpLiquidToggle" onchange="themeSetLiquid(this.checked)">
+                <span class="tp-tgl-track"></span>
+                <span class="tp-tgl-thumb"></span>
+            </label>
+        </div>
+    </div>
+
+    <div class="tp-sec">
+        <div class="tp-row">
+            <div>
+                <div class="tp-toggle-label">Hide Footer</div>
+                <div class="tp-toggle-sub">Remove version bar at bottom</div>
+            </div>
+            <label class="tp-tgl">
+                <input type="checkbox" id="tpHideFooterToggle" onchange="themeSetHideFooter(this.checked)">
                 <span class="tp-tgl-track"></span>
                 <span class="tp-tgl-thumb"></span>
             </label>
@@ -353,6 +385,11 @@ body.th-palette .breadcrumb, body.th-palette [id="breadcrumb"] { background: var
 body.th-palette .btn,
 body.th-palette .submit-btn,
 body.th-palette .cp-save-btn { background: var(--tp-accent, #1a1a1a) !important; }
+body.th-palette .footer { background: var(--tp-footer-bg, #f5f5f5) !important; color: var(--tp-footer-text, #999) !important; border-color: var(--tp-border, #e0e0e0) !important; }
+body.th-palette a, body.th-palette .file-link { color: var(--tp-link, #0066cc) !important; }
+body.th-palette input, body.th-palette select, body.th-palette textarea { background: var(--tp-input-bg, #fff) !important; border-color: var(--tp-border, #e0e0e0) !important; color: var(--tp-text, #1a1a1a) !important; }
+body.th-palette .modal-content { background: var(--tp-modal-bg, #fff) !important; }
+body.th-palette .progress-fill { background: var(--tp-progress, #1a1a1a) !important; }
 </style>
 
 <script>
@@ -364,11 +401,12 @@ let S = {
     bgUrl: '',
     accent: '#1a1a1a',
     liquid: false,
-    palette: { pageBg:'#fafafa', cardBg:'#ffffff', text:'#1a1a1a', border:'#e0e0e0', accent:'#1a1a1a', header:'#ffffff' }
+    hideFooter: false,
+    palette: { pageBg:'#fafafa', cardBg:'#ffffff', text:'#1a1a1a', border:'#e0e0e0', accent:'#1a1a1a', header:'#ffffff', footerBg:'#f5f5f5', footerText:'#999999', link:'#0066cc', inputBg:'#ffffff', modalBg:'#ffffff', progress:'#1a1a1a' }
 };
 
 function loadS() {
-    try { S = Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); S.palette = Object.assign({pageBg:'#fafafa',cardBg:'#ffffff',text:'#1a1a1a',border:'#e0e0e0',accent:'#1a1a1a',header:'#ffffff'}, S.palette); } catch(e){}
+    try { S = Object.assign(S, JSON.parse(localStorage.getItem(LS_KEY)||'{}')); S.palette = Object.assign({pageBg:'#fafafa',cardBg:'#ffffff',text:'#1a1a1a',border:'#e0e0e0',accent:'#1a1a1a',header:'#ffffff',footerBg:'#f5f5f5',footerText:'#999999',link:'#0066cc',inputBg:'#ffffff',modalBg:'#ffffff',progress:'#1a1a1a'}, S.palette); } catch(e){}
 }
 function saveS() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 
@@ -420,6 +458,13 @@ function applyAll() {
     });
     document.querySelectorAll('.tp-dot').forEach(d => d.classList.toggle('active', d.dataset.c === S.accent));
     document.getElementById('tpLiquidToggle').checked = S.liquid;
+    const hfToggle = document.getElementById('tpHideFooterToggle');
+    if (hfToggle) hfToggle.checked = !!S.hideFooter;
+
+    // Hide/show footer
+    document.querySelectorAll('.footer').forEach(function(el) {
+        el.style.display = S.hideFooter ? 'none' : '';
+    });
 
     const imgSec = document.getElementById('tpImageSec');
     const palSec = document.getElementById('tpPaletteSec');
@@ -432,16 +477,22 @@ function applyAll() {
 
 function applyPaletteVars() {
     const r = document.documentElement;
-    r.style.setProperty('--tp-page-bg', S.palette.pageBg);
-    r.style.setProperty('--tp-card-bg',  S.palette.cardBg);
-    r.style.setProperty('--tp-text',     S.palette.text);
-    r.style.setProperty('--tp-border',   S.palette.border);
-    r.style.setProperty('--tp-accent',   S.palette.accent);
-    r.style.setProperty('--tp-header',   S.palette.header);
+    r.style.setProperty('--tp-page-bg',    S.palette.pageBg);
+    r.style.setProperty('--tp-card-bg',    S.palette.cardBg);
+    r.style.setProperty('--tp-text',       S.palette.text);
+    r.style.setProperty('--tp-border',     S.palette.border);
+    r.style.setProperty('--tp-accent',     S.palette.accent);
+    r.style.setProperty('--tp-header',     S.palette.header);
+    r.style.setProperty('--tp-footer-bg',  S.palette.footerBg);
+    r.style.setProperty('--tp-footer-text',S.palette.footerText);
+    r.style.setProperty('--tp-link',       S.palette.link);
+    r.style.setProperty('--tp-input-bg',   S.palette.inputBg);
+    r.style.setProperty('--tp-modal-bg',   S.palette.modalBg);
+    r.style.setProperty('--tp-progress',   S.palette.progress);
 }
 
 function syncPaletteInputs() {
-    const map = { pcPageBg:'pageBg', pcCardBg:'cardBg', pcText:'text', pcBorder:'border', pcAccent:'accent', pcHeader:'header' };
+    const map = { pcPageBg:'pageBg', pcCardBg:'cardBg', pcText:'text', pcBorder:'border', pcAccent:'accent', pcHeader:'header', pcFooterBg:'footerBg', pcFooterText:'footerText', pcLink:'link', pcInputBg:'inputBg', pcModalBg:'modalBg', pcProgress:'progress' };
     Object.entries(map).forEach(([id, key]) => {
         const el = document.getElementById(id);
         if (el) el.value = S.palette[key] || '#ffffff';
@@ -455,7 +506,7 @@ window.themeApplyImage = function() {
     if (url.trim()) { S.bgUrl = url.trim(); S.bg = 'image'; saveS(); applyAll(); }
 };
 window.themeApplyPalette = function() {
-    const map = { pcPageBg:'pageBg', pcCardBg:'cardBg', pcText:'text', pcBorder:'border', pcAccent:'accent', pcHeader:'header' };
+    const map = { pcPageBg:'pageBg', pcCardBg:'cardBg', pcText:'text', pcBorder:'border', pcAccent:'accent', pcHeader:'header', pcFooterBg:'footerBg', pcFooterText:'footerText', pcLink:'link', pcInputBg:'inputBg', pcModalBg:'modalBg', pcProgress:'progress' };
     Object.entries(map).forEach(([id, key]) => {
         const el = document.getElementById(id);
         if (el) S.palette[key] = el.value;
@@ -464,11 +515,12 @@ window.themeApplyPalette = function() {
     saveS(); applyAll();
 };
 window.themeResetPalette = function() {
-    S.palette = { pageBg:'#fafafa', cardBg:'#ffffff', text:'#1a1a1a', border:'#e0e0e0', accent:'#1a1a1a', header:'#ffffff' };
+    S.palette = { pageBg:'#fafafa', cardBg:'#ffffff', text:'#1a1a1a', border:'#e0e0e0', accent:'#1a1a1a', header:'#ffffff', footerBg:'#f5f5f5', footerText:'#999999', link:'#0066cc', inputBg:'#ffffff', modalBg:'#ffffff', progress:'#1a1a1a' };
     saveS(); applyAll();
 };
 window.themeSetAccent = function(el) { S.accent = el.dataset.c; if (S.bg === 'palette') S.palette.accent = S.accent; saveS(); applyAll(); };
 window.themeSetLiquid = function(v) { S.liquid = v; saveS(); applyAll(); };
+window.themeSetHideFooter = function(v) { S.hideFooter = v; saveS(); applyAll(); };
 window.themeTogglePanel = function(e) {
     e.stopPropagation();
     const p = document.getElementById('themePanel');

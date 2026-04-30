@@ -29,6 +29,8 @@ type Config struct {
 	EmbedDescription    string `yaml:"embed_description"`
 	EmbedImageURL       string `yaml:"embed_image_url"`
 	WebDAVEnabled       bool   `yaml:"webdav_enabled"`
+	NodePrivateKey      string `yaml:"node_private_key"` // AES-256 key for node auth
+	NodePublicKey       string `yaml:"node_public_key"`  // public key returned to child nodes
 }
 
 // AdminLoginBan tracks brute-force attempts for the admin account per IP.
@@ -76,14 +78,16 @@ type UserAccount struct {
 }
 
 type FilePermission struct {
-	IsPublic bool   `json:"is_public"`
-	Token    string `json:"token,omitempty"`
-	Mode     uint32 `json:"mode,omitempty"`
+	IsPublic    bool   `json:"is_public"`
+	Token       string `json:"token,omitempty"`
+	Mode        uint32 `json:"mode,omitempty"`
+	PublicToken string `json:"public_token,omitempty"` // anonymous-access token; set when IsPublic=true, cleared when private
 }
 
 type FolderPermission struct {
-	IsPublic bool   `json:"is_public"`
-	Token    string `json:"token,omitempty"`
+	IsPublic    bool   `json:"is_public"`
+	Token       string `json:"token,omitempty"`
+	PublicToken string `json:"public_token,omitempty"` // anonymous-access token; set when IsPublic=true, cleared when private
 }
 
 type FileMetadata struct {
@@ -97,10 +101,11 @@ type FileMetadata struct {
 
 type FileMetadataWithPermission struct {
 	FileMetadata
-	IsPublic bool   `json:"is_public"`
-	Owner    string `json:"owner,omitempty"`   // "admin" or username of sub-user
-	UserUUID string `json:"user_uuid,omitempty"` // non-empty for user files
-	RawPath  string `json:"raw_path,omitempty"`  // full relative path for user files
+	IsPublic    bool   `json:"is_public"`
+	PublicToken string `json:"public_token,omitempty"` // only set when IsPublic=true
+	Owner       string `json:"owner,omitempty"`        // "admin" or username of sub-user
+	UserUUID    string `json:"user_uuid,omitempty"`    // non-empty for user files
+	RawPath     string `json:"raw_path,omitempty"`     // full relative path for user files
 }
 
 type TwoFACode struct {

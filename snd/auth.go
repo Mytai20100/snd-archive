@@ -98,14 +98,48 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Non-admin user login.
+		// L2 FIX: Apply the same brute-force rate-limit to sub-user accounts.
+		ip := GetClientIP(r)
+		userBanKey := ip + ":" + creds.Username
+		UserLoginMu.Lock()
+		userBan, exists := UserLoginBans[userBanKey]
+		if !exists {
+			userBan = &AdminLoginBan{}
+			UserLoginBans[userBanKey] = userBan
+		}
+		if time.Now().Before(userBan.BanExpires) {
+			remaining := time.Until(userBan.BanExpires).Round(time.Second)
+			UserLoginMu.Unlock()
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Too many failed attempts. Try again in %s.", remaining),
+				"banned":  true,
+			})
+			return
+		}
+		UserLoginMu.Unlock()
+
 		u := GetUserByUsername(creds.Username)
 		if u == nil || !u.IsActive || !CheckPassword(u.PasswordHash, creds.Password) {
+			// Record the failure and possibly ban.
+			UserLoginMu.Lock()
+			userBan.FailCount++
+			d := BanLevel(userBan.FailCount)
+			if d > 0 {
+				userBan.BanExpires = time.Now().Add(d)
+				userBan.BanDuration = d
+			}
+			UserLoginMu.Unlock()
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"message": "Invalid credentials",
 			})
 			return
 		}
+		// Successful sub-user login — clear ban record.
+		UserLoginMu.Lock()
+		delete(UserLoginBans, userBanKey)
+		UserLoginMu.Unlock()
 		loginUser = u
 	}
 
@@ -283,15 +317,31 @@ func HandleKickSession(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
+	w.Header().Set("Content-Type", "application/json")
+
+	// C2 FIX: Determine whether the caller is the true admin (no UserUUID).
+	callerSession := GetSessionInfo(r)
+	callerIsTrueAdmin := callerSession != nil && callerSession.IsAdmin && callerSession.UserUUID == ""
+
 	SessionMu.Lock()
-	delete(Sessions, req.SessionID)
+	target, exists := Sessions[req.SessionID]
+	if exists {
+		// Only the true admin may kick another admin session.
+		// Sub-users with IsAdmin=true cannot kick real-admin sessions.
+		targetIsAdmin := target.IsAdmin && target.UserUUID == ""
+		if targetIsAdmin && !callerIsTrueAdmin {
+			SessionMu.Unlock()
+			http.Error(w, "Forbidden: cannot kick admin session", http.StatusForbidden)
+			return
+		}
+		delete(Sessions, req.SessionID)
+	}
 	SessionMu.Unlock()
 
 	if Debug {
 		log.Printf("[DEBUG] Session kicked: %s", req.SessionID)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
@@ -349,6 +399,19 @@ func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
 	// FIX: HTML-escape for safe embedding in JS string literal
 	safeReturn := html.EscapeString(returnPath)
 
+	// H1 FIX: Set cf_passed cookie server-side so it has HttpOnly and Secure,
+	// preventing XSS from reading or forging it.
+	isHTTPS := r.TLS != nil
+	http.SetCookie(w, &http.Cookie{
+		Name:     "cf_passed",
+		Value:    "true",
+		Path:     "/",
+		MaxAge:   86400,
+		HttpOnly: true,
+		Secure:   isHTTPS,
+		SameSite: http.SameSiteLaxMode,
+	})
+
 	pageHTML := `<!DOCTYPE html>
 <html>
 <head>
@@ -375,8 +438,8 @@ func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
                 dest = '/';
             }
             if (dest.charAt(0) !== '/') dest = '/' + dest;
+            // H1 FIX: Cookie is now set server-side (HttpOnly). No JS cookie here.
             setTimeout(function() {
-                document.cookie = "cf_passed=true; path=/; max-age=86400";
                 window.location.href = dest;
             }, 3000);
         })();

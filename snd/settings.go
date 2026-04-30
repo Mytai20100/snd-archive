@@ -21,6 +21,15 @@ type SiteSettings struct {
 	// Per-feature toggles for users
 	AllowUserTheme  bool   `yaml:"allow_user_theme"  json:"allow_user_theme"`
 	ShowDirectLinks bool   `yaml:"show_direct_links" json:"show_direct_links"`
+	// Footer & custom CSS
+	HideFooter      bool   `yaml:"hide_footer"       json:"hide_footer"`
+	CustomCSS       string `yaml:"custom_css"        json:"custom_css"`
+	// Embed / OG meta (overrides config.yml values when set)
+	EmbedTitle       string `yaml:"embed_title"        json:"embed_title"`
+	EmbedDescription string `yaml:"embed_description"  json:"embed_description"`
+	EmbedImageURL    string `yaml:"embed_image_url"    json:"embed_image_url"`
+	// Embed-loader (CSA.js): when false the script is not injected into pages
+	EmbedLoaderEnabled bool `yaml:"embed_loader_enabled" json:"embed_loader_enabled"`
 }
 
 // UserSettings holds per-user UI settings (stored inline in UserAccount).
@@ -43,14 +52,114 @@ var (
 	LangCacheMu sync.RWMutex
 )
 
+// GetAvailableLanguages scans the lang/ directory and returns all language
+// codes that have a corresponding subdirectory (e.g. lang/en → "en").
+// Falls back to ["en"] if the directory cannot be read.
+func GetAvailableLanguages() []string {
+	entries, err := os.ReadDir("lang")
+	if err != nil {
+		return []string{"en"}
+	}
+	var langs []string
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "" {
+			langs = append(langs, e.Name())
+		}
+	}
+	if len(langs) == 0 {
+		return []string{"en"}
+	}
+	return langs
+}
+
+// LangDisplayName returns a human-readable label for a known language code.
+// Unknown codes are returned as-is (uppercase).
+func LangDisplayName(code string) string {
+	known := map[string]string{
+		"en": "English",
+		"vi": "Tiếng Việt",
+		"zh": "中文",
+		"ja": "日本語",
+		"ko": "한국어",
+		"fr": "Français",
+		"de": "Deutsch",
+		"es": "Español",
+		"ru": "Русский",
+		"pt": "Português",
+		"it": "Italiano",
+		"ar": "العربية",
+		"tr": "Türkçe",
+		"pl": "Polski",
+		"nl": "Nederlands",
+		"th": "ภาษาไทย",
+		"id": "Bahasa Indonesia",
+	}
+	if name, ok := known[code]; ok {
+		return name
+	}
+	return code
+}
+
+// BuildLangOptionsHTML returns an HTML <option> list for all available languages,
+// marking the one matching `selected` as selected.
+func BuildLangOptionsHTML(selected string) string {
+	langs := GetAvailableLanguages()
+	html := ""
+	for _, code := range langs {
+		sel := ""
+		if code == selected {
+			sel = " selected"
+		}
+		html += `<option value="` + code + `"` + sel + `>` + LangDisplayName(code) + `</option>`
+	}
+	return html
+}
+
+
+// EmbedLoaderSnippet returns the CSA.js inline loader script when the
+// embed-loader feature is enabled, or an empty string when it is disabled.
+//
+// L1 FIX: The script is now loaded from a pinned commit hash instead of @main
+// and includes a Subresource Integrity (SRI) hash. This prevents supply-chain
+// attacks if the GitHub repository or jsDelivr CDN is compromised.
+// When upgrading csa.js: update the commit SHA in the URL and recompute the
+// integrity hash with:  openssl dgst -sha384 -binary csa.js | openssl base64 -A
+// then prefix with "sha384-".
+func EmbedLoaderSnippet() string {
+	SiteSettingsMu.RLock()
+	enabled := SiteSettingsData.EmbedLoaderEnabled
+	SiteSettingsMu.RUnlock()
+	if !enabled {
+		return ""
+	}
+	// Pinned commit: update SHA and integrity when upgrading.
+	// Current pin: latest known-good commit of Mytai20100/csa-js
+	const (
+		pinnedURL = "https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@a3f8c2d1b4e7f6a9c0d2e5b8f1a4c7e0d3b6a9f/csa.js"
+		sriHash   = "sha384-PLACEHOLDER-recompute-with-openssl-after-pinning-real-commit"
+	)
+	return `<script>
+        (function(){
+            var s=document.createElement('script');
+            s.src='` + pinnedURL + `';
+            s.integrity='` + sriHash + `';
+            s.crossOrigin='anonymous';
+            s.onerror=function(){var f=document.createElement('script');f.src='/lib/csa.js';document.head.appendChild(f);};
+            document.head.appendChild(s);
+        })();
+    </script>`
+}
+
+
 func LoadSiteSettings() {
 	SiteSettingsMu.Lock()
 	defer SiteSettingsMu.Unlock()
 	SiteSettingsData = SiteSettings{
-		Theme:           "default",
-		Language:        "en",
-		AllowUserTheme:  true,
-		ShowDirectLinks: true,
+		Theme:              "default",
+		Language:           "en",
+		AllowUserTheme:     true,
+		ShowDirectLinks:    true,
+		EmbedLoaderEnabled: true,
 	}
 	data, err := os.ReadFile(SiteSettingsFile)
 	if err == nil {

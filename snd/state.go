@@ -4,6 +4,7 @@ import "sync"
 
 var (
 	Debug      bool
+	WorkDir    = "." // set to directory of the binary at startup
 	PublicDir  = "public"
 	ConfigFile = "config.yml"
 	UsersFile  = "users.yml"
@@ -36,4 +37,8 @@ var (
 	// AdminLoginBans tracks brute-force attempts per IP for admin login.
 	AdminLoginBans = make(map[string]*AdminLoginBan)
 	AdminLoginMu   sync.Mutex
+
+	// L2 FIX: UserLoginBans tracks brute-force attempts per "ip:username" for sub-user logins.
+	UserLoginBans = make(map[string]*AdminLoginBan)
+	UserLoginMu   sync.Mutex
 )

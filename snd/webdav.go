@@ -301,8 +301,11 @@ func davPut(w http.ResponseWriter, r *http.Request, fullPath string, u *UserAcco
 	written, _ := io.Copy(f, r.Body)
 
 	if u != nil {
+		// CalcUserStorage reads the filesystem – compute it before taking the lock
+		// so we don't hold the mutex during disk I/O (data-race fix, bug #3).
+		recalc := CalcUserStorage(u.UUID)
 		UsersMu.Lock()
-		u.UsedStorage = CalcUserStorage(u.UUID)
+		u.UsedStorage = recalc
 		u.RequestCount++
 		UsersMu.Unlock()
 		go SaveUsers()

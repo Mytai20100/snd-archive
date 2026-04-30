@@ -1,0 +1,198 @@
+# ServerNotDie Language File - 中文简体 (zh)
+# 将此文件放置于 lang/zh/zh.yml
+
+# 导航
+nav_login: "登录"
+nav_logout: "退出"
+nav_admin: "管理"
+nav_my_files: "我的文件"
+nav_my_account: "我的账户"
+nav_new_folder: "新建文件夹"
+nav_download_url: "从 URL 下载"
+
+# 文件操作
+file_upload: "上传"
+file_download: "下载"
+file_delete: "删除"
+file_rename: "重命名"
+file_duplicate: "复制"
+file_copy_link: "复制链接"
+file_make_public: "设为公开"
+file_make_private: "设为私有"
+file_view: "查看"
+file_play: "播放"
+file_edit: "编辑"
+file_extract: "解压"
+file_download_zip: "下载为 ZIP"
+file_properties: "属性"
+file_rename_folder: "重命名文件夹"
+file_delete_folder: "删除文件夹"
+
+# 文件状态
+status_public: "公开"
+status_private: "私有"
+status_uploading: "上传中..."
+status_loading: "加载中..."
+
+# 上传区域
+upload_drop_text: "拖放文件或点击上传（支持多文件）"
+
+# 批量操作
+bulk_zip_download: "ZIP 下载"
+bulk_make_public: "设为公开"
+bulk_make_private: "设为私有"
+bulk_delete: "删除"
+bulk_deselect: "取消全选"
+
+# 提示消息 - 成功
+toast_copied: "链接已复制！"
+toast_deleted: "已删除"
+toast_renamed: "已重命名"
+toast_uploaded: "已上传"
+toast_saved: "已保存"
+toast_logged_out: "已退出登录"
+toast_token_copied: "令牌已复制！"
+toast_settings_saved: "设置已保存"
+toast_extracted: "解压成功"
+toast_download_started: "下载已开始 — 服务器正在获取文件"
+toast_downloaded_zip: "已下载为 ZIP"
+toast_folder_renamed: "文件夹已重命名"
+toast_password_changed: "密码已修改"
+toast_node_saved: "节点已保存"
+toast_primary_node_set: "主节点已设置"
+toast_primary_cleared: "主节点已清除"
+toast_user_deleted: "用户已删除"
+toast_ddos_saved: "DDoS 配置已保存"
+toast_ip_unbanned: "IP 已解封"
+toast_ip_banned: "IP 已封禁"
+
+# 提示消息 - 错误
+toast_error: "发生错误"
+toast_error_copy: "复制失败"
+toast_error_copy_link: "复制链接失败"
+toast_error_delete: "删除失败"
+toast_error_rename: "重命名失败"
+toast_error_rename_folder: "重命名文件夹失败"
+toast_error_duplicate: "复制失败"
+toast_error_zip: "创建 ZIP 失败"
+toast_error_save: "保存失败"
+toast_error_permission: "更新权限失败"
+toast_error_extract: "解压失败"
+toast_error_read_zip: "读取 ZIP 失败"
+toast_error_create_folder: "创建文件夹失败"
+toast_error_delete_folder: "删除文件夹失败"
+toast_error_settings: "保存设置失败"
+toast_error_load_settings: "加载设置失败"
+toast_error_download: "下载失败"
+toast_error_network: "网络错误"
+toast_error_delete_user: "删除用户失败"
+toast_error_save_node: "保存节点失败"
+toast_error_ddos: "保存 DDoS 配置失败"
+toast_login_required: "需要登录"
+toast_please_login: "请登录后再上传文件"
+toast_invalid_folder: "文件夹名称无效"
+
+# 确认对话框
+confirm_delete_file: "删除 {filename}？"
+confirm_delete_folder: "删除文件夹 \"{name}\" 及其所有内容？"
+confirm_delete_user: "删除用户 \"{username}\"？此操作不可撤销。"
+confirm_delete_files_also: "同时删除 \"{username}\" 的所有文件？"
+confirm_delete_node: "删除此节点？"
+confirm_save_user: "保存对 \"{username}\" 的更改？"
+
+# 验证消息
+validation_enter_name: "请输入名称"
+validation_enter_folder_name: "请输入文件夹名称"
+validation_select_files: "请选择文件"
+validation_username_required: "请输入用户名"
+validation_password_required: "新用户需要设置密码"
+validation_fields_required: "请填写所有字段。"
+validation_passwords_no_match: "两次密码不一致。"
+
+# 消息提示
+msg_copied: "链接已复制！"
+msg_deleted: "已删除"
+msg_renamed: "已重命名"
+msg_uploaded: "已上传"
+msg_error: "发生错误"
+msg_confirm_delete: "确定要删除吗？"
+msg_confirm_delete_files: "删除所选文件？此操作不可撤销。"
+
+# 模态框标题
+modal_view_file: "查看文件"
+modal_edit_file: "编辑文件"
+modal_rename: "重命名"
+modal_properties: "属性"
+modal_create_folder: "新建文件夹"
+modal_download_url: "从 URL 下载"
+
+# 模态框按钮
+modal_cancel: "取消"
+modal_save: "保存"
+modal_rename_btn: "重命名"
+modal_create: "创建"
+modal_download: "下载"
+modal_close: "关闭"
+
+# URL 下载模态框
+download_url_desc: "服务器将从此 URL 获取文件并保存到当前文件夹。"
+download_url_label: "URL"
+download_url_placeholder: "https://example.com/file.zip"
+
+# 分享页面
+share_public_files: "公开文件"
+share_search_placeholder: "搜索公开文件..."
+share_no_files: "暂无公开文件"
+share_no_files_sub: "管理员标记为公开的文件将显示在此处。"
+
+# 设置
+settings_title: "设置"
+settings_background_url: "背景图片 URL"
+settings_background_music: "背景音乐 URL"
+settings_language: "语言"
+settings_show_direct_links: "显示直接链接"
+settings_save: "保存设置"
+settings_saved: "设置已保存"
+
+# 账户
+account_username: "用户名"
+account_email: "邮箱"
+account_api_token: "API 令牌"
+account_storage_used: "已用空间"
+account_storage_limit: "空间限制"
+account_change_password: "修改密码"
+account_current_password: "当前密码"
+account_new_password: "新密码"
+account_confirm_password: "确认新密码"
+account_save_password: "保存密码"
+account_saving: "保存中..."
+account_my_api_token: "我的 API 令牌"
+account_show: "显示"
+account_copy: "复制"
+
+# 右键菜单
+ctx_rename: "重命名"
+ctx_delete: "删除"
+ctx_rename_folder: "重命名文件夹"
+ctx_delete_folder: "删除文件夹"
+ctx_download_zip: "下载为 ZIP"
+ctx_copy_link: "复制链接"
+ctx_properties: "属性"
+ctx_extract: "解压"
+ctx_duplicate: "复制"
+ctx_edit: "编辑"
+ctx_view: "查看"
+ctx_play: "播放"
+
+# 搜索
+search_placeholder: "搜索文件..."
+search_esc_hint: "按 ESC 关闭"
+
+# 界面元素
+ui_selected: "已选择"
+ui_root: "根目录"
+ui_public: "公开"
+ui_private: "私有"
+ui_downloads: "次下载"
+ui_visibility: "公开 / 私有"
+

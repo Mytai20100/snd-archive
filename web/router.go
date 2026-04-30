@@ -14,6 +14,7 @@ import (
 func SetupRoutes() {
 	http.HandleFunc("/favicon.ico", snd.HandleFavicon)
 	http.HandleFunc("/lib/", snd.HandleLibFile)
+	http.HandleFunc("/css/", snd.HandleCSSFile)
 	http.HandleFunc("/icons/", snd.HandleIconFile)
 	http.HandleFunc("/error", snd.HandleErrorPage)
 
@@ -49,10 +50,14 @@ func SetupRoutes() {
 	http.HandleFunc("/access-logs", snd.RequireAdmin(snd.HandleAccessLogs))
 
 	// ─── File operations ──────────────────────────────────────────────────────
+	// H3 FIX: /files now requires at minimum a valid session or token.
+	// HandleListFiles still filters results by auth level internally,
+	// but unauthenticated callers must not be able to enumerate folder structure.
 	http.HandleFunc("/files", snd.ObfuscateHandler(snd.HandleListFiles))
 	http.HandleFunc("/public-files", snd.HandlePublicFiles)
 	http.HandleFunc("/upload", snd.ObfuscateHandler(snd.RequireAuth(snd.HandleUpload)))
 	http.HandleFunc("/upload-chunk", snd.ObfuscateHandler(snd.RequireAuth(snd.HandleUploadChunk)))
+	http.HandleFunc("/check-exists", snd.ObfuscateHandler(snd.RequireAuth(snd.HandleCheckExists)))
 	http.HandleFunc("/create-folder", snd.RequireAuth(snd.HandleCreateFolder))
 	http.HandleFunc("/delete-folder/", snd.RequireAuth(snd.HandleDeleteFolder))
 	http.HandleFunc("/rename-folder/", snd.RequireAuth(snd.HandleRenameFolder))
@@ -82,15 +87,18 @@ func SetupRoutes() {
 	http.HandleFunc("/zip-multiple", snd.RequireAuth(snd.HandleZipMultiple))
 	http.HandleFunc("/zip-view/", snd.HandleZipView)
 	http.HandleFunc("/extract-zip/", snd.RequireAuth(snd.HandleExtractZip))
+	http.HandleFunc("/download-url", snd.RequireAuth(snd.HandleDownloadByURL))
 
 	// ─── Benchmarks ───────────────────────────────────────────────────────────
-	http.HandleFunc("/benchmark/ping", snd.HandleBenchmarkPing)
-	http.HandleFunc("/benchmark/download", snd.HandleBenchmarkDownload)
-	http.HandleFunc("/benchmark/upload", snd.HandleBenchmarkUpload)
+	// M1 FIX: All benchmark endpoints now require at least a valid auth session.
+	// /benchmark/disk remains RequireAdmin (more sensitive: writes to disk).
+	http.HandleFunc("/benchmark/ping", snd.RequireAuth(snd.HandleBenchmarkPing))
+	http.HandleFunc("/benchmark/download", snd.RequireAuth(snd.HandleBenchmarkDownload))
+	http.HandleFunc("/benchmark/upload", snd.RequireAuth(snd.HandleBenchmarkUpload))
 	http.HandleFunc("/benchmark/disk", snd.RequireAdmin(snd.HandleBenchmarkDisk))
-	http.HandleFunc("/benchmark/cpu", snd.HandleBenchmarkCPU)
-	http.HandleFunc("/benchmark/memory", snd.HandleBenchmarkMemory)
-	http.HandleFunc("/benchmark/network", snd.HandleBenchmarkNetwork)
+	http.HandleFunc("/benchmark/cpu", snd.RequireAuth(snd.HandleBenchmarkCPU))
+	http.HandleFunc("/benchmark/memory", snd.RequireAuth(snd.HandleBenchmarkMemory))
+	http.HandleFunc("/benchmark/network", snd.RequireAuth(snd.HandleBenchmarkNetwork))
 
 	// ─── WebDAV (Windows Network Locations) ──────────────────────────────────
 	http.HandleFunc("/dav/", snd.HandleWebDAV)
@@ -105,6 +113,8 @@ func SetupRoutes() {
 	http.HandleFunc("/admin/nodes/update", snd.RequireAdmin(snd.HandleUpdateNode))
 	http.HandleFunc("/admin/nodes/delete", snd.RequireAdmin(snd.HandleDeleteNode))
 	http.HandleFunc("/admin/nodes/set-primary", snd.RequireAdmin(snd.HandleSetPrimaryNode))
+	http.HandleFunc("/api/v9/connect", snd.HandleNodeConnect)
+	http.HandleFunc("/admin/nodes/info", snd.RequireAdmin(snd.HandleNodeInfo))
 
 	// ─── Anti-DDoS (admin) ───────────────────────────────────────────────────
 	http.HandleFunc("/admin/ddos/config", snd.RequireAdmin(snd.HandleDDoSConfig))

@@ -14,14 +14,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <title>Login</title>
+    <link rel="stylesheet" href="/css/main.css">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             display: flex; align-items: center; justify-content: center;
-            min-height: 100vh;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #fafafa;
-            transition: background 0.3s;
+            min-height: 100vh; padding-bottom: 0;
+            background: #fafafa; transition: background 0.3s;
         }
         .login-box {
             position: relative; z-index: 10;
@@ -35,14 +33,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         input[type="text"], input[type="password"] {
             width: 100%; padding: 11px 12px; border: 1px solid #d0d0d0;
             font-size: 14px; background: #fff; color: #1a1a1a;
-            outline: none; border-radius: 4px;
-            transition: border-color 0.15s;
+            outline: none; border-radius: 4px; transition: border-color 0.15s;
         }
         input:focus { border-color: #1a1a1a; }
         .submit-btn {
             width: 100%; padding: 12px; background: #1a1a1a; color: white;
             border: none; cursor: pointer; font-size: 14px; margin-top: 8px;
             border-radius: 4px; transition: background 0.2s;
+            touch-action: manipulation;
         }
         .submit-btn:hover { background: #333; }
         .twofa-notice {
@@ -55,7 +53,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border-left: 3px solid #d32f2f; font-size: 13px; color: #c62828;
             display: none; border-radius: 0 4px 4px 0;
         }
-        /* Liquid glass overrides for login box */
+        /* Liquid glass overrides */
         body.th-liquid .login-box {
             background: rgba(255,255,255,0.10) !important;
             backdrop-filter: blur(32px) saturate(200%) brightness(1.08) !important;
@@ -91,40 +89,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <div class="error-msg" id="errorMsg"></div>
 </div>
 
-<script>
-document.addEventListener('keydown', function(e) { if (e.key === 'Enter') login(); });
-function login() {
-    const payload = {
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value
-    };
-    const twofaCode = document.getElementById('twofa').value;
-    if (twofaCode) payload.twofa_code = twofaCode;
-    fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) })
-    .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            window.location.href = data.redirect || '/';
-        } else if (data.require_2fa) {
-            document.getElementById('twofaField').style.display = 'block';
-            const n = document.getElementById('twofaNotice');
-            n.style.display = 'block';
-            n.textContent = data.message + ' Check your Discord webhook for the code.';
-            document.getElementById('twofa').focus();
-        } else {
-            const err = document.getElementById('errorMsg');
-            err.style.display = 'block';
-            err.textContent = data.message || 'Login failed';
-        }
-    })
-    .catch(() => {
-        const err = document.getElementById('errorMsg');
-        err.style.display = 'block';
-        err.textContent = 'Connection error. Please try again.';
-    });
-}
-</script>
-
+<script src="/lib/login.js"></script>
 ` + snd.ThemeSnippet("login") + `
 </body>
 </html>`

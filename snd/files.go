@@ -2,7 +2,6 @@ package snd
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -11,11 +10,15 @@ import (
 	"log"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/yeka/zip"
 )
 
 // resolveBaseDir returns the appropriate file base directory and permission key prefix.
@@ -123,6 +126,7 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Quota check for user accounts
+		var storageRemaining int64 = -1
 		if userAccount != nil && userAccount.StorageLimit > 0 {
 			used := CalcUserStorage(userAccount.UUID)
 			if used >= userAccount.StorageLimit {
@@ -134,6 +138,7 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			storageRemaining = userAccount.StorageLimit - used
 		}
 
 		// FIX: validate upload path with safePath
@@ -156,7 +161,12 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		written, err := io.Copy(dst, part)
+		// Cap the read to the remaining quota (plus one byte to detect overflow).
+		var reader io.Reader = part
+		if storageRemaining >= 0 {
+			reader = io.LimitReader(part, storageRemaining+1)
+		}
+		written, err := io.Copy(dst, reader)
 		dst.Close()
 		part.Close()
 
@@ -168,12 +178,21 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// If we read more than the remaining quota the file exceeded the limit.
+		if storageRemaining >= 0 && written > storageRemaining {
+			os.Remove(targetPath)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Storage quota exceeded",
+			})
+			return
+		}
+
 		if userAccount != nil {
 			UsersMu.Lock()
-			userAccount.UsedStorage += written
 			userAccount.RequestCount++
 			UsersMu.Unlock()
-			go SaveUsers()
 		}
 
 		uploadedCount++
@@ -181,6 +200,16 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 		if Debug {
 			log.Printf("[UPLOAD] %s (%d bytes)", targetPath, written)
 		}
+	}
+
+	// Recalculate UsedStorage from disk after all files are written so the
+	// stored value stays accurate regardless of deletions or renames.
+	if userAccount != nil {
+		recalc := CalcUserStorage(userAccount.UUID)
+		UsersMu.Lock()
+		userAccount.UsedStorage = recalc
+		UsersMu.Unlock()
+		go SaveUsers()
 	}
 
 	UpdateStats()
@@ -223,7 +252,19 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		baseDir = UserPublicDir(userAccount.UUID)
 		if userAccount.StorageLimit > 0 {
 			used := CalcUserStorage(userAccount.UUID)
-			if used >= userAccount.StorageLimit {
+			// On the first chunk we know the full file size; reject early so we
+			// never write bytes that would exceed the limit.
+			if offset == 0 && total > 0 && used+total > userAccount.StorageLimit {
+				http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
+				return
+			}
+			// On subsequent chunks the growing .upload_tmp is included in used;
+			// if we are somehow already at the limit, abort and clean up the tmp.
+			if offset > 0 && used >= userAccount.StorageLimit {
+				tmpPathEarly, ok2 := safePath(baseDir, filepath.Join(currentPath, filename+".upload_tmp"))
+				if ok2 {
+					os.Remove(tmpPathEarly)
+				}
 				http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
 				return
 			}
@@ -278,9 +319,32 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if final {
+		// Check if caller wants to overwrite or rename
+		action := r.URL.Query().Get("action") // "overwrite" | "rename" | "" (default overwrite for backward-compat)
+		if action == "rename" {
+			// Find a non-conflicting name
+			ext := filepath.Ext(targetPath)
+			base := targetPath[:len(targetPath)-len(ext)]
+			for i := 1; i < 1000; i++ {
+				candidate := fmt.Sprintf("%s (%d)%s", base, i, ext)
+				if _, err := os.Stat(candidate); os.IsNotExist(err) {
+					targetPath = candidate
+					break
+				}
+			}
+		}
 		if err := os.Rename(tmpPath, targetPath); err != nil {
 			http.Error(w, "Finalize error", http.StatusInternalServerError)
 			return
+		}
+		// Recalculate UsedStorage from disk now that the file is committed.
+		if userAccount != nil {
+			recalc := CalcUserStorage(userAccount.UUID)
+			UsersMu.Lock()
+			userAccount.UsedStorage = recalc
+			userAccount.RequestCount++
+			UsersMu.Unlock()
+			go SaveUsers()
 		}
 		UpdateStats()
 	}
@@ -291,6 +355,35 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		"offset":  offset,
 		"total":   total,
 		"done":    final,
+	})
+}
+
+// HandleCheckExists checks if a file already exists at the upload destination.
+// POST /check-exists  body: {"path":"subdir","filename":"foo.zip"}
+// Returns: {"exists": true/false, "filename": "resolved name"}
+func HandleCheckExists(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path     string `json:"path"`
+		Filename string `json:"filename"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	filename := filepath.Base(req.Filename)
+	if filename == "" || filename == "." {
+		http.Error(w, "bad filename", http.StatusBadRequest)
+		return
+	}
+	baseDir, _ := resolveBaseDir(r)
+	targetPath, ok := safePath(baseDir, filepath.Join(req.Path, filename))
+	if !ok {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	_, err := os.Stat(targetPath)
+	exists := err == nil
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"exists":   exists,
+		"filename": filename,
 	})
 }
 
@@ -314,6 +407,16 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
+		// Directory doesn't exist yet (e.g. new user with no uploads) — return empty list
+		// instead of 500 so the dashboard doesn't show "Error loading files".
+		if os.IsNotExist(err) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"files":   []FileMetadataWithPermission{},
+				"folders": []string{},
+			})
+			return
+		}
 		http.Error(w, "Error reading directory", http.StatusInternalServerError)
 		return
 	}
@@ -370,8 +473,9 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 					ModTime:       info.ModTime(),
 					DownloadCount: count,
 				},
-				IsPublic: isPublic,
-				Owner:    ownerName(userAccount),
+				IsPublic:    isPublic,
+				PublicToken: perm.PublicToken,
+				Owner:       ownerName(userAccount),
 			})
 		}
 	}
@@ -1287,6 +1391,24 @@ func HandleZipView(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errZipNeedsPassword is returned when a ZIP requires a password but none was supplied.
+var errZipNeedsPassword = fmt.Errorf("needs_password")
+
+// zipIsEncrypted returns true if at least one file entry in the ZIP is encrypted.
+func zipIsEncrypted(src string) bool {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		if f.IsEncrypted() {
+			return true
+		}
+	}
+	return false
+}
+
 func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	archivePath := strings.TrimPrefix(r.URL.Path, "/extract-zip/")
 	baseDir, _ := resolveBaseDir(r)
@@ -1297,6 +1419,13 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid path"})
 		return
+	}
+
+	// Read optional password from POST body
+	var password string
+	if r.Method == http.MethodPost {
+		r.ParseForm()
+		password = r.FormValue("password")
 	}
 
 	extractName := archivePath
@@ -1332,11 +1461,22 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	case ext == ".gz":
 		extractErr = extractSingleGz(fullArchivePath, extractDir)
 	default:
-		extractErr = extractZipArchive(fullArchivePath, extractDir)
+		// For ZIP: check encryption before extracting
+		if password == "" && zipIsEncrypted(fullArchivePath) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "needs_password": true})
+			return
+		}
+		extractErr = extractZipArchive(fullArchivePath, extractDir, password)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if extractErr != nil {
+		// Wrong password → tell the frontend to ask again
+		if extractErr == errZipNeedsPassword {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "needs_password": true, "wrong_password": true})
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": extractErr.Error()})
 		return
 	}
@@ -1345,16 +1485,24 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func extractZipArchive(src, destDir string) error {
+func extractZipArchive(src, destDir string, password string) error {
 	reader, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+	safeBase := filepath.ToSlash(filepath.Clean(destDir)) + "/"
 	for _, f := range reader.File {
 		target := filepath.Join(destDir, filepath.Clean(f.Name))
-		if !strings.HasPrefix(target, destDir) {
-			continue // zip-slip guard
+		// zip-slip guard: target must be inside destDir
+		if !strings.HasPrefix(filepath.ToSlash(target)+"/", safeBase) {
+			continue
+		}
+		if f.IsEncrypted() {
+			if password == "" {
+				return errZipNeedsPassword
+			}
+			f.SetPassword(password)
 		}
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(target, f.Mode())
@@ -1363,6 +1511,11 @@ func extractZipArchive(src, destDir string) error {
 		os.MkdirAll(filepath.Dir(target), 0755)
 		rc, err := f.Open()
 		if err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "password") || strings.Contains(errStr, "decrypt") ||
+				strings.Contains(errStr, "checksum") || strings.Contains(errStr, "invalid") {
+				return errZipNeedsPassword
+			}
 			continue
 		}
 		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
@@ -1370,9 +1523,16 @@ func extractZipArchive(src, destDir string) error {
 			rc.Close()
 			continue
 		}
-		io.Copy(out, rc)
+		_, copyErr := io.Copy(out, rc)
 		out.Close()
 		rc.Close()
+		if copyErr != nil {
+			errStr := copyErr.Error()
+			if strings.Contains(errStr, "password") || strings.Contains(errStr, "decrypt") ||
+				strings.Contains(errStr, "checksum") || strings.Contains(errStr, "invalid") {
+				return errZipNeedsPassword
+			}
+		}
 	}
 	return nil
 }
@@ -1401,6 +1561,8 @@ func extractTarRaw(src, destDir string) error {
 }
 
 func extractTarStream(tr *tar.Reader, destDir string) error {
+	// Ensure destDir ends with separator for reliable prefix matching
+	safeBase := filepath.ToSlash(filepath.Clean(destDir)) + "/"
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -1410,8 +1572,9 @@ func extractTarStream(tr *tar.Reader, destDir string) error {
 			return err
 		}
 		target := filepath.Join(destDir, filepath.Clean(header.Name))
-		if !strings.HasPrefix(target, destDir) {
-			continue // tar-slip guard
+		// tar-slip guard: target must be inside destDir
+		if !strings.HasPrefix(filepath.ToSlash(target)+"/", safeBase) {
+			continue
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -1710,7 +1873,18 @@ func HandleSetPermission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	PermissionMu.Lock()
-	FilePermissions[key] = FilePermission{IsPublic: req.IsPublic}
+	existing := FilePermissions[key]
+	if req.IsPublic {
+		// Reuse existing token if already public; generate a new one if not.
+		if existing.PublicToken == "" {
+			existing.PublicToken = GenerateRandomToken(32)
+		}
+		existing.IsPublic = true
+	} else {
+		existing.IsPublic = false
+		existing.PublicToken = "" // revoke anonymous access token
+	}
+	FilePermissions[key] = existing
 	PermissionMu.Unlock()
 	SaveFilePermissions()
 
@@ -1721,7 +1895,11 @@ func HandleSetPermission(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[PERMISSION] user=%s file=%q set to %s", username, req.Filename, status)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Permission updated successfully"})
+	resp := map[string]interface{}{"message": "Permission updated successfully"}
+	if req.IsPublic {
+		resp["public_token"] = existing.PublicToken
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func HandleSetFolderPermission(w http.ResponseWriter, r *http.Request) {
@@ -1739,7 +1917,17 @@ func HandleSetFolderPermission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	PermissionMu.Lock()
-	FolderPermissions[key] = FolderPermission{IsPublic: req.IsPublic}
+	existing := FolderPermissions[key]
+	if req.IsPublic {
+		if existing.PublicToken == "" {
+			existing.PublicToken = GenerateRandomToken(32)
+		}
+		existing.IsPublic = true
+	} else {
+		existing.IsPublic = false
+		existing.PublicToken = "" // revoke anonymous access token
+	}
+	FolderPermissions[key] = existing
 	PermissionMu.Unlock()
 	SaveFolderPermissions()
 
@@ -1748,7 +1936,12 @@ func HandleSetFolderPermission(w http.ResponseWriter, r *http.Request) {
 		status = "PUBLIC"
 	}
 	log.Printf("[PERMISSION] user=%s folder=%q set to %s", username, req.Path, status)
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+
+	resp := map[string]interface{}{"success": true}
+	if req.IsPublic {
+		resp["public_token"] = existing.PublicToken
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func HandleSetChmod(w http.ResponseWriter, r *http.Request) {
@@ -1851,9 +2044,18 @@ func HandleFolderView(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// C1 FIX: Never expose the admin APIToken to sub-users.
+	// Return the requesting user's own token, or empty for unauthenticated.
 	token := ""
 	if isAuth {
-		token = Cfg.APIToken
+		session := GetSessionInfo(r)
+		if session != nil && session.UserUUID != "" {
+			// Sub-user: return their own token
+			if u := GetUserByUUID(session.UserUUID); u != nil {
+				token = u.APIToken
+			}
+		}
+		// True admin gets no token here — they don't need one passed via JSON
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2148,37 +2350,54 @@ func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(pageHTML))
 }
 
-// HandleLibFile serves static files from the lib/ directory, including subdirectories (for Monaco).
+// HandleLibFile serves static files from web/lib/ (new JS modules) and lib/ (Monaco editor).
 func HandleLibFile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/lib/")
-
-	// FIX: was blocking "/" which prevented Monaco subdirectory loading
-	// Now use safePath to allow subdirectories while preventing traversal
-	libPath, ok := safePath("lib", name)
-	if !ok || strings.Contains(name, "..") {
+	if name == "" || strings.Contains(name, "..") {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
+	name = filepath.Clean(name)
 
-	// Set content type by extension
+	var ct string
 	switch {
 	case strings.HasSuffix(name, ".js"):
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		ct = "application/javascript; charset=utf-8"
 	case strings.HasSuffix(name, ".css"):
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		ct = "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".json"):
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		ct = "application/json; charset=utf-8"
 	case strings.HasSuffix(name, ".woff2"):
-		w.Header().Set("Content-Type", "font/woff2")
+		ct = "font/woff2"
 	case strings.HasSuffix(name, ".woff"):
-		w.Header().Set("Content-Type", "font/woff")
+		ct = "font/woff"
 	case strings.HasSuffix(name, ".ttf"):
-		w.Header().Set("Content-Type", "font/ttf")
+		ct = "font/ttf"
 	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
+		ct = "application/octet-stream"
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	http.ServeFile(w, r, libPath)
+
+	tryServe := func(absPath string) bool {
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			return false
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+		return true
+	}
+
+	// Try web/lib/ first (refactored JS modules), then lib/ (Monaco/legacy)
+	if tryServe(filepath.Join(WorkDir, "web", "lib", name)) {
+		return
+	}
+	if tryServe(filepath.Join(WorkDir, "lib", name)) {
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
 }
 
 // HandleAPIView streams or renders image/video directly for the new /api/view/{file_id} endpoint.
@@ -2271,4 +2490,150 @@ func HandleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
+}
+
+// ─── Download by URL (server-side fetch) ─────────────────────────────────────
+
+// HandleDownloadByURL fetches a remote URL server-side and saves it into the
+// current directory (admin → PublicDir, user → their storage dir).
+// validateDownloadURL blocks SSRF by rejecting non-HTTP(S) schemes and
+// private / loopback / link-local addresses resolved from the host.
+func validateDownloadURL(raw string) error {
+	u, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("only http and https URLs are allowed")
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("missing host")
+	}
+	// Resolve and check every IP the host maps to
+	addrs, err := net.LookupHost(hostname)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host: %v", err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("requests to private or internal addresses are not allowed")
+		}
+		// Block 169.254.0.0/16 (AWS/GCP metadata) explicitly
+		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 {
+			return fmt.Errorf("requests to link-local addresses are not allowed")
+		}
+	}
+	return nil
+}
+
+// POST /download-url   body JSON: {"url":"https://...","path":"optional/subdir"}
+func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		URL  string `json:"url"`
+		Path string `json:"path"` // optional subdirectory inside base
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		http.Error(w, `{"error":"url required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// SSRF protection: validate scheme and block private/internal IPs
+	if err := validateDownloadURL(req.URL); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	baseDir, _ := resolveBaseDir(r)
+
+	// Build save directory
+	saveDir := baseDir
+	if req.Path != "" {
+		rel := filepath.Clean(req.Path)
+		if strings.HasPrefix(rel, "..") {
+			http.Error(w, `{"error":"invalid path"}`, http.StatusBadRequest)
+			return
+		}
+		saveDir = filepath.Join(baseDir, rel)
+	}
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		http.Error(w, `{"error":"cannot create directory"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Derive filename from URL
+	urlPath := req.URL
+	if idx := strings.Index(urlPath, "?"); idx != -1 {
+		urlPath = urlPath[:idx]
+	}
+	filename := filepath.Base(urlPath)
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "download"
+	}
+	// Sanitize
+	filename = filepath.Base(filepath.Clean(filename))
+
+	destPath := filepath.Join(saveDir, filename)
+
+	// Fetch with a size limit (512 MB) and timeout
+	client := &http.Client{
+		Timeout: 30 * 60 * 1000000000, // 30 min in nanoseconds
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			// Re-validate after redirect
+			if err := validateDownloadURL(req.URL.String()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+	resp, err := client.Get(req.URL)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "fetch failed: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": fmt.Sprintf("remote returned %d", resp.StatusCode)})
+		return
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		http.Error(w, `{"error":"cannot create file"}`, http.StatusInternalServerError)
+		return
+	}
+	// Limit download size to 512 MB
+	const maxDownloadBytes = 512 * 1024 * 1024
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxDownloadBytes))
+	out.Close()
+	if err != nil {
+		os.Remove(destPath)
+		http.Error(w, `{"error":"write failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[DOWNLOAD-URL] saved %s (%d bytes) from %s", destPath, written, req.URL)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"filename": filename,
+		"size":     written,
+	})
 }
