@@ -1,4 +1,4 @@
-// ===== lib/share.js — public share page =====
+// lib/share.js — public share page
 // Requires: utils.js
 
 'use strict';
@@ -8,27 +8,37 @@ function _t(key, fallback) { return (window._lang && window._lang[key]) || fallb
 let allFiles      = [];
 let filteredFiles = [];
 
+// Preview state
+let _shareFiles = [];
+let _shareIdx   = -1;
+function setPreviewFiles(files) { _shareFiles = files; }
+
 // ── URL builders ──────────────────────────────────────────────────────────────
+
 function buildRawUrl(f) {
     if (f.user_uuid && f.raw_path)
         return window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
     return window.location.origin + '/raw/' + encodeURIComponent(f.name);
 }
+
 function buildStreamUrl(f) {
     if (f.user_uuid && f.raw_path)
         return '/stream/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
     return '/stream/' + encodeURIComponent(f.name);
 }
+
 function buildApiViewUrl(f) {
     if (f.user_uuid && f.raw_path)
         return '/api/view/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
     return '/api/view/' + encodeURIComponent(f.name);
 }
+
 function buildThumbnailUrl(f) {
     if (f.user_uuid && f.raw_path)
         return '/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
     return '/thumbnail/' + encodeURIComponent(f.name);
 }
+
 function buildDownloadUrl(f) {
     if (f.user_uuid && f.raw_path)
         return '/download/' + encodeURIComponent(f.raw_path) + '?u=' + f.user_uuid;
@@ -36,6 +46,7 @@ function buildDownloadUrl(f) {
 }
 
 // ── Load & stats ──────────────────────────────────────────────────────────────
+
 async function loadPublicFiles() {
     try {
         const res = await fetch('/public-files');
@@ -55,6 +66,7 @@ function updateStats(files) {
     const totalDownloads = files.reduce((s, f) => s + (f.download_count || 0), 0);
     const admFiles       = files.filter(f => !f.user_uuid).length;
     const userFiles      = files.filter(f =>  f.user_uuid).length;
+
     document.getElementById('statsBar').innerHTML =
         '<span><strong>' + files.length + '</strong> public files</span>' +
         '<span>Total size: <strong>' + formatFileSize(totalSize) + '</strong></span>' +
@@ -73,6 +85,7 @@ function filterFiles() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
+
 function renderFiles(files) {
     const section = document.getElementById('filesSection');
     if (!files.length) {
@@ -85,22 +98,21 @@ function renderFiles(files) {
     }
 
     const badgeColors = {
-        text:    'background:#e8f5e9;color:#2e7d32',
-        image:   'background:#e3f2fd;color:#1976d2',
-        video:   'background:#fce4ec;color:#c2185b',
-        audio:   'background:#f3e5f5;color:#7b1fa2',
-        archive: 'background:#fff3e0;color:#f57c00',
-        document:'background:#ffebee;color:#d32f2f',
+        text:     'background:#e8f5e9;color:#2e7d32',
+        image:    'background:#e3f2fd;color:#1976d2',
+        video:    'background:#fce4ec;color:#c2185b',
+        audio:    'background:#f3e5f5;color:#7b1fa2',
+        archive:  'background:#fff3e0;color:#f57c00',
+        document: 'background:#ffebee;color:#d32f2f',
     };
 
     setPreviewFiles(files);
 
     section.innerHTML = files.map((f, idx) => {
-        const rawUrl   = buildRawUrl(f);
-        const modDate  = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
-        const typeBadge = badgeColors[f.type] || 'background:#f5f5f5;color:#616161';
-
-        const isUser    = !!f.user_uuid;
+        const rawUrl     = buildRawUrl(f);
+        const modDate    = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
+        const typeBadge  = badgeColors[f.type] || 'background:#f5f5f5;color:#616161';
+        const isUser     = !!f.user_uuid;
         const ownerLabel = f.owner
             ? (isUser
                 ? '<span class="file-owner-tag">@' + escapeHtml(f.owner) + '</span>'
@@ -144,14 +156,11 @@ function copyFileLink(idx) {
     const f = filteredFiles[idx];
     if (!f) return;
     navigator.clipboard.writeText(buildRawUrl(f))
-        .then(() => showToast(_t('toast_copied','Link copied!'), 'success'))
-        .catch(() => showToast(_t('toast_error_copy','Failed to copy'), 'error'));
+        .then(()  => showToast(_t('toast_copied', 'Link copied!'), 'success'))
+        .catch(()  => showToast(_t('toast_error_copy', 'Failed to copy'), 'error'));
 }
 
 // ── Preview modal ─────────────────────────────────────────────────────────────
-let _shareFiles = [];
-let _shareIdx   = -1;
-function setPreviewFiles(files) { _shareFiles = files; }
 
 function openPreviewByIdx(idx) {
     _shareIdx = idx;

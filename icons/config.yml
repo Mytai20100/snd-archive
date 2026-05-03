@@ -1,7 +1,6 @@
 # Icon Configuration for snd-archive
 # Maps file extensions and types to SVG icon files in this directory.
 # Format: extension: icon_filename (without .svg)
-# You can change any mapping to point to a different icon file.
 
 # ── Type-level defaults ──────────────────────────────────────────
 type_default:   file
@@ -17,16 +16,33 @@ type_database:  database
 
 # ── Extension overrides ──────────────────────────────────────────
 extensions:
-  # Images
+  # ── Images ──
   .jpg:    image
   .jpeg:   image
   .png:    image
   .gif:    image
   .webp:   image
-  .svg:    image
+  .svg:    vector
   .bmp:    image
   .avif:   image
-  # Video
+  .ico:    image
+  .tif:    image
+  .tiff:   image
+  .psd:    psd
+  .ai:     vector
+  .eps:    vector
+  .xcf:    psd
+
+  # ── 3D / CAD ──
+  .obj:    3d
+  .fbx:    3d
+  .stl:    3d
+  .glb:    3d
+  .gltf:   3d
+  .blend:  3d
+  .dae:    3d
+
+  # ── Video ──
   .mp4:    video
   .webm:   video
   .mkv:    video
@@ -34,41 +50,174 @@ extensions:
   .mov:    video
   .m3u8:   video
   .ts:     video
-  # Audio
+  .flv:    video
+  .wmv:    video
+  .m4v:    video
+
+  # ── Audio ──
   .mp3:    audio
   .wav:    audio
   .flac:   audio
   .aac:    audio
   .ogg:    audio
   .m4a:    audio
-  # Archives
+  .opus:   audio
+  .wma:    audio
+  .aiff:   audio
+
+  # ── Archives ──
   .zip:    archive
   .tar:    archive
   .gz:     archive
   .7z:     archive
   .rar:    archive
-  # Documents
-  .pdf:    document
-  .doc:    document
-  .docx:   document
-  .xls:    document
-  .xlsx:   document
-  .ppt:    document
-  .pptx:   document
-  # Code/Text
-  .go:     code
-  .py:     code
-  .js:     code
-  .ts:     code
-  .html:   code
-  .css:    code
-  .json:   code
-  .yaml:   code
-  .yml:    code
-  .sh:     code
-  .md:     text
+  .bz2:    archive
+  .xz:     archive
+  .zst:    archive
+  .iso:    iso
+  .torrent: torrent
+
+  # ── Documents ──
+  .pdf:    pdf
+  .doc:    word
+  .docx:   word
+  .odt:    word
+  .xls:    excel
+  .xlsx:   excel
+  .ods:    excel
+  .csv:    csv
+  .ppt:    ppt
+  .pptx:   ppt
+  .odp:    ppt
+  .epub:   epub
+
+  # ── Programming languages ──
+  .go:     go
+  .py:     python
+  .pyw:    python
+  .ipynb:  python
+  .js:     javascript
+  .mjs:    javascript
+  .cjs:    javascript
+  .jsx:    javascript
+  .ts:     typescript
+  .tsx:    typescript
+  .rs:     rust
+  .java:   java
+  .class:  java
+  .jar:    java
+  .kt:     kotlin
+  .kts:    kotlin
+  .c:      c
+  .h:      c
+  .cpp:    cpp
+  .cc:     cpp
+  .cxx:    cpp
+  .hpp:    cpp
+  .cs:     csharp
+  .php:    php
+  .rb:     ruby
+  .swift:  swift
+  .lua:    lua
+  .pl:     code
+  .pm:     code
+  .r:      code
+  .dart:   code
+  .scala:  code
+  .hs:     code
+  .ex:     code
+  .exs:    code
+  .clj:    code
+  .zig:    code
+  .nim:    code
+  .v:      code
+  .f90:    code
+  .f95:    code
+
+  # ── Web ──
+  .html:   html
+  .htm:    html
+  .css:    css
+  .scss:   css
+  .sass:   css
+  .less:   css
+  .vue:    javascript
+  .svelte: javascript
+
+  # ── Config / Data ──
+  .json:   json
+  .jsonc:  json
+  .json5:  json
+  .yaml:   yaml
+  .yml:    yaml
+  .toml:   toml
+  .ini:    toml
+  .cfg:    toml
+  .conf:   toml
+  .xml:    xml
+  .xhtml:  xml
+  .rss:    xml
+  .atom:   xml
+  .env:    env
+  .env.local: env
+  .lock:   toml
+
+  # ── Shell / Scripts ──
+  .sh:     shell
+  .bash:   shell
+  .zsh:    shell
+  .fish:   shell
+  .bat:    shell
+  .cmd:    shell
+  .ps1:    shell
+
+  # ── Text / Docs ──
+  .md:     markdown
+  .mdx:    markdown
+  .rst:    text
   .txt:    text
-  # Database
+  .log:    log
+
+  # ── Database ──
   .db:     database
   .sqlite: database
+  .sqlite3: database
   .sql:    database
+  .mdb:    database
+  .accdb:  database
+
+  # ── Certificates / Keys ──
+  .pem:    cert
+  .crt:    cert
+  .cer:    cert
+  .p12:    cert
+  .pfx:    cert
+  .key:    key
+  .pub:    key
+  .gpg:    key
+
+  # ── Containers / Build ──
+  Dockerfile: dockerfile
+  .dockerfile: dockerfile
+  .makefile: shell
+  Makefile: shell
+  .mk:     shell
+
+  # ── Fonts ──
+  .ttf:    font
+  .otf:    font
+  .woff:   font
+  .woff2:  font
+  .eot:    font
+
+  # ── Executables / Apps ──
+  .exe:    exe
+  .dll:    exe
+  .so:     exe
+  .apk:    apk
+  .aab:    apk
+  .ipa:    apk
+  .dmg:    dmg
+  .deb:    exe
+  .rpm:    exe
+  .appimage: exe

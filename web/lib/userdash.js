@@ -1,5 +1,4 @@
-// ===== lib/userdash.js — sub-user dashboard logic =====
-// Requires: utils.js, context-menu.js, upload.js
+// userdash.js
 // Globals expected: USER_UUID, USER_TOKEN, addTokenToURL, makePublicURL, makePrivateURL
 
 'use strict';
@@ -15,7 +14,6 @@ let selectedFiles = new Set();
 let bulkMode      = false;
 let _showDirectLinks = true;
 
-// ── Preview state ─────────────────────────────────────────────────────────────
 let _previewFiles = [];
 let _previewIdx   = -1;
 function setPreviewFiles(files) { _previewFiles = files; }
@@ -86,7 +84,6 @@ function advancePreview(dir) {
     showPreview(fn, f.type);
 }
 
-// ── Navigation ───────────────────────────────────────────────────────────────
 function navigateToFolder(folderName) { currentPath = folderName; loadFiles(); updateBreadcrumb(); }
 function navigateToRoot()             { currentPath = ''; loadFiles(); updateBreadcrumb(); }
 function updateBreadcrumb() {
@@ -108,7 +105,6 @@ function updateBreadcrumb() {
     bc.innerHTML = html;
 }
 
-// ── Search ───────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', function (e) {
     if (e.ctrlKey && e.key === 'f') { e.preventDefault(); showSearch(); }
     if (e.key === 'Escape') document.getElementById('searchOverlay').style.display = 'none';
@@ -142,7 +138,6 @@ function jumpToItem(name) {
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('search-highlight'); setTimeout(() => el.classList.remove('search-highlight'), 2800); }
 }
 
-// ── Bulk select ───────────────────────────────────────────────────────────────
 function selectAllFiles() {
     if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
     selectedFiles.clear(); allFiles.forEach(f => selectedFiles.add(f.name));
@@ -166,7 +161,6 @@ function downloadSelectedAsZip() {
         .catch(() => showToast(_t('toast_error_zip','Failed to create ZIP'), 'error'));
 }
 
-// ── Load files ────────────────────────────────────────────────────────────────
 function loadFiles() {
     const url = currentPath ? '/files?path=' + encodeURIComponent(currentPath) : '/files';
     const section = document.getElementById('filesSection');
@@ -262,7 +256,6 @@ function loadFiles() {
     }).catch(() => { document.getElementById('filesSection').innerHTML = '<div class="empty-state">Error loading files. Please refresh.</div>'; });
 }
 
-// ── File actions ──────────────────────────────────────────────────────────────
 function togglePublicSwitch(filename, isPublic) {
     fetch('/set-permission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, is_public: isPublic }) })
         .then(r => r.json()).then(d => {
@@ -444,7 +437,6 @@ function confirmCreateFolder() {
         .then(r => r.json()).then(d => { showToast(d.message, 'success'); closeModal('createFolderModal'); loadFiles(); }).catch(() => showToast(_t('toast_error_create_folder','Failed to create folder'), 'error'));
 }
 
-// ── API Token section ─────────────────────────────────────────────────────────
 function closeApiTokenSection() {
     const s = document.getElementById('apiTokenSection');
     if (s) { s.style.display = 'none'; localStorage.setItem('hideApiToken_user', 'true'); }
@@ -465,13 +457,11 @@ function copyToken() {
     navigator.clipboard.writeText(USER_TOKEN).then(() => showToast(_t('toast_token_copied','Token copied!'), 'success')).catch(() => showToast(_t('toast_error_copy','Failed to copy'), 'error'));
 }
 
-// ── Direct links visibility ───────────────────────────────────────────────────
 function applyDirectLinksVisibility(show) {
     _showDirectLinks = show !== false;
     document.querySelectorAll('.file-link').forEach(el => el.style.display = _showDirectLinks ? '' : 'none');
 }
 
-// ── Background music ──────────────────────────────────────────────────────────
 function applyUserBgMusic(url) {
     let audio = document.getElementById('bgMusicPlayer');
     if (!url) { if (audio) { audio.pause(); audio.remove(); } return; }
@@ -479,7 +469,6 @@ function applyUserBgMusic(url) {
     if (audio.src !== url) { audio.src = url; audio.play().catch(() => {}); }
 }
 
-// ── User Settings ─────────────────────────────────────────────────────────────
 function openSettingsPanel() {
     fetch('/user/settings').then(r => r.json()).then(data => {
         const s = data.settings || {};
@@ -508,7 +497,6 @@ async function saveUserSettings() {
     else showToast(_t('toast_error_settings','Failed to save settings'), 'error');
 }
 
-// ─── Skeleton loader ──────────────────────────────────────────────────────────
 function _skeletonHTML(rows) {
     rows = rows || 6;
     var style = '<style>' +
@@ -530,7 +518,6 @@ function _skeletonHTML(rows) {
     return html;
 }
 
-// ─── Download by URL ──────────────────────────────────────────────────────────
 var _dlQueue = [];
 var _dlQueueIdSeq = 0;
 
