@@ -119,12 +119,11 @@ func BuildLangOptionsHTML(selected string) string {
 // EmbedLoaderSnippet returns the CSA.js inline loader script when the
 // embed-loader feature is enabled, or an empty string when it is disabled.
 //
-// L1 FIX: The script is now loaded from a pinned commit hash instead of @main
-// and includes a Subresource Integrity (SRI) hash. This prevents supply-chain
-// attacks if the GitHub repository or jsDelivr CDN is compromised.
-// When upgrading csa.js: update the commit SHA in the URL and recompute the
-// integrity hash with:  openssl dgst -sha384 -binary csa.js | openssl base64 -A
-// then prefix with "sha384-".
+// Load order: local /lib/csa.js first (served from web/lib/csa.js on disk),
+// CDN is used only as a fallback when the local file is unavailable.
+// This avoids CDN failures causing broken pages.
+// When upgrading csa.js: replace the local file at web/lib/csa.js and update
+// the pinnedURL/sriHash constants below for the CDN fallback if desired.
 func EmbedLoaderSnippet() string {
 	SiteSettingsMu.RLock()
 	enabled := SiteSettingsData.EmbedLoaderEnabled
@@ -132,8 +131,8 @@ func EmbedLoaderSnippet() string {
 	if !enabled {
 		return ""
 	}
+	// CDN fallback (used only when local /lib/csa.js fails to load).
 	// Pinned commit: update SHA and integrity when upgrading.
-	// Current pin: latest known-good commit of Mytai20100/csa-js
 	const (
 		pinnedURL = "https://cdn.jsdelivr.net/gh/Mytai20100/csa-js@a3f8c2d1b4e7f6a9c0d2e5b8f1a4c7e0d3b6a9f/csa.js"
 		sriHash   = "sha384-PLACEHOLDER-recompute-with-openssl-after-pinning-real-commit"
@@ -141,10 +140,14 @@ func EmbedLoaderSnippet() string {
 	return `<script>
         (function(){
             var s=document.createElement('script');
-            s.src='` + pinnedURL + `';
-            s.integrity='` + sriHash + `';
-            s.crossOrigin='anonymous';
-            s.onerror=function(){var f=document.createElement('script');f.src='/lib/csa.js';document.head.appendChild(f);};
+            s.src='/lib/csa.js';
+            s.onerror=function(){
+                var f=document.createElement('script');
+                f.src='` + pinnedURL + `';
+                f.integrity='` + sriHash + `';
+                f.crossOrigin='anonymous';
+                document.head.appendChild(f);
+            };
             document.head.appendChild(s);
         })();
     </script>`

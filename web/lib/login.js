@@ -1,8 +1,8 @@
-// ===== lib/login.js — login page logic =====
+// lib/login.js — login page logic
 
 'use strict';
 
-document.addEventListener('keydown', function (e) {
+document.addEventListener('keydown', e => {
     if (e.key === 'Enter') login();
 });
 
@@ -11,6 +11,7 @@ function login() {
         username: document.getElementById('username').value,
         password: document.getElementById('password').value
     };
+
     const twofaCode = document.getElementById('twofa').value;
     if (twofaCode) payload.twofa_code = twofaCode;
 
@@ -23,19 +24,21 @@ function login() {
     .then(data => {
         if (data.success) {
             window.location.href = data.redirect || '/';
-        } else if (data.require_2fa) {
+            return;
+        }
+        if (data.require_2fa) {
             document.getElementById('twofaField').style.display = 'block';
             const n = document.getElementById('twofaNotice');
             n.style.display = 'block';
             n.textContent = data.message + ' Check your Discord webhook for the code.';
             document.getElementById('twofa').focus();
-        } else {
-            const err = document.getElementById('errorMsg');
-            err.style.display = 'block';
-            err.textContent = data.message || 'Login failed';
+            return;
         }
+        const err = document.getElementById('errorMsg');
+        err.style.display = 'block';
+        err.textContent = data.message || 'Login failed';
     })
-    .catch(function () {
+    .catch(() => {
         const err = document.getElementById('errorMsg');
         err.style.display = 'block';
         err.textContent = 'Connection error. Please try again.';

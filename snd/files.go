@@ -685,8 +685,33 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentHTML := ""
+	monacoScript := ""
 	if fileType == "text" {
-		contentHTML = `<div class="code-block">` + h.EscapeString(string(content)) + `</div>`
+		ext := filepath.Ext(filename)
+		monacoLang := monacoLangForExt(ext)
+		contentJSON, _ := json.Marshal(string(content))
+		contentHTML = `<div id="monaco-view-container" style="height:600px;border:1px solid #e0e0e0;border-radius:4px;overflow:hidden;"></div>`
+		monacoScript = `
+    <script src="/lib/vs/loader.js"></script>
+    <script>
+        require.config({ paths: { 'vs': '/lib/vs' } });
+        require(['vs/editor/editor.main'], function() {
+            monaco.editor.create(document.getElementById('monaco-view-container'), {
+                value: ` + string(contentJSON) + `,
+                language: '` + monacoLang + `',
+                theme: 'vs',
+                readOnly: true,
+                fontSize: 13,
+                minimap: { enabled: true },
+                automaticLayout: true,
+                wordWrap: 'off',
+                scrollBeyondLastLine: false,
+                renderWhitespace: 'boundary',
+                folding: true,
+                lineNumbers: 'on',
+            });
+        });
+    </script>`
 	} else if fileType == "document" && strings.HasSuffix(filename, ".pdf") {
 		contentHTML = `<iframe src="/raw/` + h.EscapeString(filename) + `?token=` + h.EscapeString(token) + `" style="width:100%;height:800px;border:none;"></iframe>`
 	} else {
@@ -741,6 +766,7 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
             ` + contentHTML + `
         </div>
     </div>
+    ` + monacoScript + `
 </body>
 </html>`
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

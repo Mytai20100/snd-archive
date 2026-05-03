@@ -1,4 +1,4 @@
-// ─── Tab Switching ────────────────────────────────────────────────────────────
+// admin.js
 function switchTab(name) {
     document.querySelectorAll('.tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -12,7 +12,6 @@ function switchTab(name) {
     if (name === 'settings') loadAdminSettings();
 }
 
-// ─── User Management ──────────────────────────────────────────────────────────
 let editingUser = null;
 const userDataMap = {};
 
@@ -183,7 +182,6 @@ async function doDeleteUser(uuid, deleteFiles) {
     else showToast(_t('toast_error_delete_user','Failed to delete user'));
 }
 
-// ─── Sessions ─────────────────────────────────────────────────────────────────
 async function loadSessions() {
     try {
         const res = await fetch('/sessions');
@@ -211,7 +209,6 @@ async function kickSession(sessionId, btn) {
     } catch { btn.disabled = false; btn.textContent = 'Kick'; }
 }
 
-// ─── Logs ─────────────────────────────────────────────────────────────────────
 async function loadLogs() {
     try {
         const res = await fetch('/access-logs');
@@ -224,7 +221,6 @@ async function loadLogs() {
     } catch { document.getElementById('logsTableBody').innerHTML = '<tr><td colspan="4" style="padding:16px;color:#d32f2f;">Failed to load logs</td></tr>'; }
 }
 
-// ─── Benchmarks ───────────────────────────────────────────────────────────────
 function showResult(text) { const r = document.getElementById('benchmarkResults'); r.style.display = 'block'; r.textContent = text; }
 
 async function runPingTest() {
@@ -250,7 +246,6 @@ async function runDiskTest() { showResult('Testing disk...'); const r=await fetc
 async function runCPUTest() { showResult('Testing CPU...'); const r=await fetch('/benchmark/cpu'); const d=await r.json(); showResult('CPU Test\nIterations: '+d.iterations.toLocaleString()+'\nTime: '+d.duration_ms+' ms'); }
 async function runMemoryTest() { showResult('Testing memory...'); const r=await fetch('/benchmark/memory'); const d=await r.json(); showResult('Memory\nAlloc: '+d.alloc_mb+' MB\nSys: '+d.sys_mb+' MB\nGoroutines: '+d.goroutines+'\nGC Runs: '+d.num_gc); }
 
-// ─── Storage Node Management ──────────────────────────────────────────────────
 let nodeModalMode = 'create', editingNodeId = null;
 
 async function loadNodes() {
@@ -277,7 +272,6 @@ async function loadNodes() {
     } catch(e) { c.innerHTML = '<div style="color:#d32f2f;padding:16px;">Failed to load nodes: ' + e.message + '</div>'; }
 }
 
-// ─── Add Node: choose Manual or Quick Setup ───────────────────────────────────
 function promptAddNode() {
     const existing = document.getElementById('_addNodeChoiceModal');
     if (existing) existing.remove();
@@ -355,7 +349,6 @@ function openQuickSetupModal() {
     };
 }
 
-// ─── Node Info Modal (3-dot button) ──────────────────────────────────────────
 async function openNodeInfoModal(nodeId) {
     const existing = document.getElementById('_nodeInfoModal');
     if (existing) existing.remove();
@@ -479,7 +472,6 @@ async function setNodeBackup(id, backup) {
     await fetch('/admin/nodes/update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(n) });
 }
 
-// ─── Anti-DDoS ────────────────────────────────────────────────────────────────
 async function loadDDoS() {
     const c = document.getElementById('ddosContent');
     try {
@@ -532,7 +524,6 @@ async function loadDDoS() {
     } catch(e) { c.innerHTML = '<div style="color:#d32f2f;padding:16px;">Failed to load DDoS data: ' + e.message + '</div>'; }
 }
 
-// ─── Dynamic byte formatter ───────────────────────────────────────────────────
 function formatBytesChart(bytes) {
     if (bytes === 0) return '0 B';
     var units = ['B','KB','MB','GB','TB','PB'];
@@ -617,8 +608,7 @@ function drawDDoSChart(traffic) {
     ctx.fillStyle = 'rgba(76,175,80,0.75)'; ctx.fillRect(pad.l + 64, 6, 10, 8);
     ctx.fillStyle = '#555'; ctx.fillText('Download', pad.l + 77, 14);
 
-    // ─── Tooltip on hover ────────────────────────────────────────────────────
-    // Remove old tooltip handler and attach fresh one
+        // Remove old tooltip handler and attach fresh one
     canvas._ddosTraffic = traffic;
     canvas._ddosPad = pad;
     canvas._ddosCh  = ch;
@@ -685,7 +675,6 @@ async function manualBan() {
     loadDDoS(); showToast('IP banned');
 }
 
-// ─── Admin Settings ───────────────────────────────────────────────────────────
 async function loadAdminSettings() {
     try {
         const res = await fetch('/admin/settings');
@@ -745,7 +734,6 @@ function applyBgMusic(url) {
     if (audio.src !== url) { audio.src = url; audio.play().catch(()=>{}); }
 }
 
-// ─── Utils ────────────────────────────────────────────────────────────────────
 function escapeHtml(text) { const d = document.createElement('div'); d.textContent = text||''; return d.innerHTML; }
 
 function closeConfirmModal() {

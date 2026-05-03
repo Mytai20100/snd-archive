@@ -1,5 +1,4 @@
-// ===== lib/dashboard.js — dashboard page logic =====
-// Requires: utils.js, context-menu.js, upload.js
+// dashboard.js
 // Globals expected from inline script: isAuthenticated, _apiToken, addTokenToURL, getAuthToken
 
 'use strict';
@@ -14,7 +13,6 @@ let allFolders = [];
 let selectedFiles = new Set();
 let bulkMode = false;
 
-// ── Preview state ────────────────────────────────────────────────────────────
 let _previewFiles = [];
 let _previewIdx   = -1;
 function setPreviewFiles(files) { _previewFiles = files; }
@@ -104,7 +102,6 @@ function advancePreview(dir) {
     showPreview(fn, f.type);
 }
 
-// ── Navigation ───────────────────────────────────────────────────────────────
 function navigateToFolder(folderName) { currentPath = folderName; loadFiles(); updateBreadcrumb(); }
 function navigateToRoot()             { currentPath = ''; loadFiles(); updateBreadcrumb(); }
 
@@ -127,7 +124,6 @@ function updateBreadcrumb() {
     bc.innerHTML = html;
 }
 
-// ── Search ───────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', function (e) {
     if (e.ctrlKey && e.key === 'f') { e.preventDefault(); showSearch(); }
     if (e.key === 'Escape') document.getElementById('searchOverlay').style.display = 'none';
@@ -172,7 +168,6 @@ function jumpToItem(name) {
     }
 }
 
-// ── Bulk select ───────────────────────────────────────────────────────────────
 function selectAllFiles() {
     if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
     selectedFiles.clear();
@@ -235,7 +230,6 @@ function downloadSelectedAsZip() {
         }).catch(() => showToast(_t('toast_error_zip','Failed to create ZIP'), 'error'));
 }
 
-// ── Load files ────────────────────────────────────────────────────────────────
 function loadFiles() {
     const url = currentPath ? '/files?path=' + encodeURIComponent(currentPath) : '/files';
     // Show skeleton while loading
@@ -255,8 +249,7 @@ function loadFiles() {
             }
 
             let html = '';
-            // ── Folders ──────────────────────────────────────────────────────
-            folders.forEach(folder => {
+                        folders.forEach(folder => {
                 const fullPath = currentPath ? currentPath + '/' + folder : folder;
                 const escapedFP = fullPath.replace(/'/g, "\\'");
                 const escapedF  = folder.replace(/'/g, "\\'");
@@ -297,8 +290,7 @@ function loadFiles() {
                 });
             }
 
-            // ── Files ────────────────────────────────────────────────────────
-            setPreviewFiles(files);
+                        setPreviewFiles(files);
             files.forEach(f => {
                 const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
                 const rawUrl    = window.location.origin + '/raw/' + encodeURIComponent(fullFileName);
@@ -379,7 +371,6 @@ function loadFiles() {
         });
 }
 
-// ── File actions ──────────────────────────────────────────────────────────────
 function togglePublicSwitch(filename, isPublic) {
     fetch('/set-permission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, is_public: isPublic }) })
         .then(r => r.json())
@@ -605,7 +596,6 @@ function confirmCreateFolder() {
         .then(r => r.json()).then(d => { showToast(d.message, 'success'); closeModal('createFolderModal'); loadFiles(); })
         .catch(() => showToast(_t('toast_error_create_folder','Failed to create folder'), 'error'));
 }
-// ─── Skeleton loader ──────────────────────────────────────────────────────────
 function _skeletonHTML(rows) {
     rows = rows || 6;
     var style = '<style>' +
@@ -631,7 +621,6 @@ function logout() {
     fetch('/logout').then(() => { showToast(_t('toast_logged_out','Logged out'), 'success'); setTimeout(() => location.reload(), 1000); });
 }
 
-// ─── ZIP extract with password modal ─────────────────────────────────────────
 function extractArchive(filename, password, _confirmed) {
     if (!_confirmed && !password) { showConfirm('Extract "' + filename.split('/').pop() + '" here?', function() { extractArchive(filename, '', true); }); return; }
     showToast(_t('msg_extracting','Extracting…'), 'success');
@@ -680,7 +669,6 @@ function showZipPasswordModal(filename, wrongPassword) {
     setTimeout(() => { const inp = document.getElementById('zip-pw-input'); if (inp) inp.focus(); }, 50);
 }
 
-// ─── Download by URL ──────────────────────────────────────────────────────────
 // Queue tracks all in-progress and completed downloads so the modal stays open.
 var _dlQueue = []; // [{id, url, filename, status, pct, error}]
 var _dlQueueIdSeq = 0;
