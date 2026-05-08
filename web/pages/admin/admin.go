@@ -127,6 +127,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div class="tab" data-tab="users" onclick="switchTab('users')">Users</div>
             <div class="tab" data-tab="sessions" onclick="switchTab('sessions')">Sessions</div>
             <div class="tab" data-tab="logs" onclick="switchTab('logs')">Access Logs</div>
+            <div class="tab" data-tab="seclog" onclick="switchTab('seclog')">Security Log</div>
+            <div class="tab" data-tab="allowlist" onclick="switchTab('allowlist')">Allowlist</div>
             <div class="tab" data-tab="benchmark" onclick="switchTab('benchmark')">Benchmark</div>
             <div class="tab" data-tab="nodes" onclick="switchTab('nodes')">Storage Nodes</div>
             <div class="tab" data-tab="ddos" onclick="switchTab('ddos')">Anti-DDoS</div>
@@ -201,6 +203,54 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div id="ddosContent"><div style="color:#999;padding:16px;">Loading...</div></div>
         </div>
 
+        <!-- Security Log Tab -->
+        <div id="tab-seclog" class="tab-content" style="margin-top:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                <div>
+                    <h3 style="font-size:15px;font-weight:500;display:inline;">Security Event Log</h3>
+                    <span style="font-size:12px;color:#888;margin-left:10px;">Last 500 events, newest first</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="seclogFilter" onchange="loadSecurityLogs()" style="padding:5px 10px;border:1px solid #d0d0d0;border-radius:4px;font-size:13px;">
+                        <option value="">All events</option>
+                        <option value="login_fail">Login failures</option>
+                        <option value="login_ban">Login bans</option>
+                        <option value="ddos_ban">DDoS bans</option>
+                        <option value="ddos_block">DDoS blocks</option>
+                        <option value="archive_bomb">Archive bombs</option>
+                    </select>
+                    <button class="btn" onclick="loadSecurityLogs()" style="padding:6px 14px;font-size:13px;">↺ Refresh</button>
+                </div>
+            </div>
+            <div class="logs-wrapper" style="max-height:520px;">
+                <table class="logs-table" style="width:100%;">
+                    <thead>
+                        <tr>
+                            <th style="width:155px;">Time</th>
+                            <th style="width:130px;">IP</th>
+                            <th style="width:120px;">Event</th>
+                            <th>Reason / Detail</th>
+                            <th style="width:120px;">User</th>
+                            <th style="width:90px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="seclogTableBody"><tr><td colspan="6" style="padding:16px;color:#999;">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Allowlist Tab -->
+        <div id="tab-allowlist" class="tab-content" style="margin-top:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                <div>
+                    <h3 style="font-size:15px;font-weight:500;display:inline;">Trusted IP Allowlist</h3>
+                    <span style="font-size:12px;color:#888;margin-left:10px;">IPs bypass Anti-DDoS rate limiting</span>
+                </div>
+                <button class="btn" onclick="promptAddAllowEntry()">+ Add IP</button>
+            </div>
+            <div id="allowlistContainer"><div style="color:#999;padding:16px;">Loading...</div></div>
+        </div>
+
         <!-- Settings Tab -->
         <div id="tab-settings" class="tab-content" style="margin-top:16px;">
             <div id="adminSettingsContent">
@@ -229,6 +279,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 <div class="info-row">
                     <span class="info-label">Hide Footer</span>
                     <label class="toggle-switch"><input type="checkbox" id="as-hide-footer"><span class="toggle-slider"></span></label>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Allow QR Code</span>
+                    <label class="toggle-switch"><input type="checkbox" id="as-allow-qr"><span class="toggle-slider"></span></label>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Show User Public Files on Share Page</span>
+                    <label class="toggle-switch"><input type="checkbox" id="as-show-user-public"><span class="toggle-slider"></span></label>
+                </div>
+                <div style="font-size:11px;color:#aaa;margin:-6px 0 10px 0;padding-left:0;">When enabled, files and folders that users set to Public will appear on the /share page with their username.</div>
+                <div class="info-row" id="as-qr-logo-row" style="display:none;">
+                    <span class="info-label">QR Logo URL</span>
+                    <input type="text" id="as-qr-logo" placeholder="https://... (logo shown in center of QR)" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:300px;">
                 </div>
                 <div class="info-row" style="align-items:flex-start;">
                     <span class="info-label" style="padding-top:6px;">Custom CSS</span>
@@ -510,6 +573,10 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
             <span class="info-label">Show Direct Links</span>
             <label class="toggle-switch"><input type="checkbox" id="us-direct-links"><span class="toggle-slider"></span></label>
         </div>
+        <div class="info-row" id="us-qr-row" style="display:none;">
+            <span class="info-label">Enable QR Code</span>
+            <label class="toggle-switch"><input type="checkbox" id="us-enable-qr"><span class="toggle-slider"></span></label>
+        </div>
         <div style="margin-top:16px;">
             <button class="btn" onclick="saveUserSettings()">Save Settings</button>
         </div>
@@ -572,6 +639,10 @@ function copyToken() {
         if (music) music.value = s.bg_music_url   || '';
         if (lang)  lang.value  = s.language        || 'en';
         if (dl)    dl.checked  = !!s.show_direct_links;
+        var qrRow = document.getElementById('us-qr-row');
+        var qrEl  = document.getElementById('us-enable-qr');
+        if (data.allow_qr && qrRow) { qrRow.style.display = ''; }
+        if (qrEl) qrEl.checked = !!s.enable_qr;
     }).catch(function() {});
 })();
 
@@ -580,7 +651,8 @@ function saveUserSettings() {
         background_url:    (document.getElementById('us-bg')    || {}).value || '',
         bg_music_url:      (document.getElementById('us-music') || {}).value || '',
         language:          (document.getElementById('us-lang')  || {}).value || 'en',
-        show_direct_links: !!(document.getElementById('us-direct-links') || {}).checked
+        show_direct_links: !!(document.getElementById('us-direct-links') || {}).checked,
+        enable_qr: !!(document.getElementById('us-enable-qr') || {}).checked
     };
     fetch('/user/settings/save', {
         method: 'POST',

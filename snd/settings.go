@@ -30,6 +30,11 @@ type SiteSettings struct {
 	EmbedImageURL    string `yaml:"embed_image_url"    json:"embed_image_url"`
 	// Embed-loader (CSA.js): when false the script is not injected into pages
 	EmbedLoaderEnabled bool `yaml:"embed_loader_enabled" json:"embed_loader_enabled"`
+	// QR Code generation
+	AllowQR    bool   `yaml:"allow_qr"     json:"allow_qr"`
+	QRLogoURL  string `yaml:"qr_logo_url"  json:"qr_logo_url"`
+	// Share page: whether to include user public files/folders in /share listing
+	ShowUserPublicOnShare bool `yaml:"show_user_public_on_share" json:"show_user_public_on_share"`
 }
 
 // UserSettings holds per-user UI settings (stored inline in UserAccount).
@@ -40,6 +45,7 @@ type UserSettings struct {
 	BgMusicURL      string `yaml:"bg_music_url"     json:"bg_music_url"`
 	Language        string `yaml:"language"         json:"language"`
 	ShowDirectLinks bool   `yaml:"show_direct_links" json:"show_direct_links"`
+	EnableQR        bool   `yaml:"enable_qr"        json:"enable_qr"`
 }
 
 var (
@@ -158,15 +164,22 @@ func LoadSiteSettings() {
 	SiteSettingsMu.Lock()
 	defer SiteSettingsMu.Unlock()
 	SiteSettingsData = SiteSettings{
-		Theme:              "default",
-		Language:           "en",
-		AllowUserTheme:     true,
-		ShowDirectLinks:    true,
-		EmbedLoaderEnabled: true,
+		Theme:                "default",
+		Language:             "en",
+		AllowUserTheme:       true,
+		ShowDirectLinks:      true,
+		EmbedLoaderEnabled:   true,
+		ShowUserPublicOnShare: true,
 	}
 	data, err := os.ReadFile(SiteSettingsFile)
 	if err == nil {
 		yaml.Unmarshal(data, &SiteSettingsData)
+		// Re-apply defaults for boolean fields added after initial release.
+		// yaml.Unmarshal sets absent bool fields to false (zero value), overriding our defaults.
+		// We detect this by checking whether the key is literally present in the raw file bytes.
+		if !strings.Contains(string(data), "show_user_public_on_share") {
+			SiteSettingsData.ShowUserPublicOnShare = true
+		}
 	}
 }
 
@@ -270,11 +283,15 @@ func HandleUserGetSettings(w http.ResponseWriter, r *http.Request) {
 	UsersMu.RUnlock()
 	SiteSettingsMu.RLock()
 	allowTheme := SiteSettingsData.AllowUserTheme
+	allowQR    := SiteSettingsData.AllowQR
+	qrLogoURL  := SiteSettingsData.QRLogoURL
 	SiteSettingsMu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"settings":    liveSettings,
 		"allow_theme": allowTheme,
+		"allow_qr":    allowQR,
+		"qr_logo_url": qrLogoURL,
 	})
 }
 

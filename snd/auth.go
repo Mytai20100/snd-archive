@@ -83,6 +83,7 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			if d > 0 {
 				msg := fmt.Sprintf("Too many failed attempts. Banned for %s.", formatDuration(d))
 				log.Printf("[SECURITY] Admin brute-force from %s: attempt #%d, banned %s", ip, failCount, d)
+				AppendSecurityEvent(ip, SecEvtLoginBan, fmt.Sprintf("Admin brute-force: attempt #%d, banned %s", failCount, formatDuration(d)), Cfg.Username)
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"success": false,
 					"message": msg,
@@ -90,6 +91,7 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			AppendSecurityEvent(ip, SecEvtLoginFail, fmt.Sprintf("Admin login failed (attempt #%d)", ban.FailCount), Cfg.Username)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"message": "Invalid credentials",

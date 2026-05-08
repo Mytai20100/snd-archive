@@ -388,34 +388,34 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 	isPublic := (filePublic && filePerm.IsPublic) || (folderPublic && folderPerm.IsPublic)
 
 	if isPublic {
-		// Public file: anonymous access requires matching pt= public token.
-		// If the file/folder has a PublicToken set, enforce it.
-		// Legacy entries with no PublicToken are allowed through for backward compat.
+		// Public file: accessible without token. If a pt= token is provided, validate
+		// it as an extra check, but a missing pt= is not a reason to block access.
 		pt := r.URL.Query().Get("pt")
-		fileHasToken := filePublic && filePerm.IsPublic && filePerm.PublicToken != ""
-		folderHasToken := folderPublic && folderPerm.IsPublic && folderPerm.PublicToken != ""
-
-		// If neither the file nor the folder has a PublicToken, allow (legacy share).
-		needsTokenCheck := fileHasToken || folderHasToken
-		if needsTokenCheck {
-			ptOK := (fileHasToken && tokenEqual(pt, filePerm.PublicToken)) ||
-				(folderHasToken && tokenEqual(pt, folderPerm.PublicToken))
-			if !ptOK {
-				// Still allow authenticated sessions / API tokens
-				token := r.URL.Query().Get("token")
-				if token == "" {
-					token = r.Header.Get("X-API-Token")
-				}
-				tokenOK := token == user.APIToken || token == Cfg.APIToken
-				if !tokenOK {
-					session := getValidSession(r)
-					if session == nil || (!session.IsAdmin && session.UserUUID != uuid) {
-						http.Error(w, "Unauthorized", http.StatusUnauthorized)
-						return
+		if pt != "" {
+			fileHasToken := filePublic && filePerm.IsPublic && filePerm.PublicToken != ""
+			folderHasToken := folderPublic && folderPerm.IsPublic && folderPerm.PublicToken != ""
+			needsTokenCheck := fileHasToken || folderHasToken
+			if needsTokenCheck {
+				ptOK := (fileHasToken && tokenEqual(pt, filePerm.PublicToken)) ||
+					(folderHasToken && tokenEqual(pt, folderPerm.PublicToken))
+				if !ptOK {
+					// Wrong token provided explicitly — reject
+					token := r.URL.Query().Get("token")
+					if token == "" {
+						token = r.Header.Get("X-API-Token")
+					}
+					tokenOK := token == user.APIToken || token == Cfg.APIToken
+					if !tokenOK {
+						session := getValidSession(r)
+						if session == nil || (!session.IsAdmin && session.UserUUID != uuid) {
+							http.Error(w, "Unauthorized", http.StatusUnauthorized)
+							return
+						}
 					}
 				}
 			}
 		}
+		// No pt= provided → allow freely (file is public)
 	} else {
 		// Private file: require API token or session
 		token := r.URL.Query().Get("token")

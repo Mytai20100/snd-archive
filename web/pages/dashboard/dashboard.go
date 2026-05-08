@@ -223,13 +223,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 <button class="close-btn" onclick="closeModal('downloadURLModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <div style="font-size:13px;color:#666;margin-bottom:12px;" data-i18n="download_url_desc">Server will fetch the file from this URL and save it to the current folder.</div>
+                <div style="font-size:13px;color:#666;margin-bottom:12px;" data-i18n="download_url_desc">Server will fetch the file from this URL and save it to the current folder. For YouTube/Vimeo/etc. you'll get a format picker.</div>
                 <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">URL</label>
                 <div style="display:flex;gap:8px;">
-                    <input type="url" id="dlUrlInput" placeholder="https://example.com/file.zip"
+                    <input type="url" id="dlUrlInput" placeholder="https://example.com/file.zip or youtube.com/watch?v=..."
                            style="flex:1;padding:10px;border:1px solid #e0e0e0;font-size:13px;border-radius:4px;box-sizing:border-box;"
+                           oninput="_dlAdminUrlHint(this.value)"
                            onkeydown="if(event.key==='Enter')confirmDownloadURL()">
                     <button class="btn-small" id="dlUrlBtn" onclick="confirmDownloadURL()" data-i18n="modal_download" style="white-space:nowrap;">Download</button>
+                </div>
+                <div id="dlAdminStreamHint" style="display:none;margin-top:8px;font-size:12px;color:#1976d2;background:#e3f2fd;border-radius:4px;padding:6px 10px;">
+                    Streaming platform detected — clicking Download will open the format picker.
                 </div>
                 <div id="dlUrlQueue" style="display:none;margin-top:14px;border-top:1px solid #f0f0f0;padding-top:4px;max-height:240px;overflow-y:auto;"></div>
                 <style>@keyframes _dlPulse{0%,100%{opacity:1;width:30%}50%{opacity:.6;width:60%}}</style>
@@ -240,12 +244,31 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
+    <!-- Stream Format Picker Modal -->
+    <div class="modal" id="streamFormatModal">
+        <div class="modal-content" style="max-width:560px;">
+            <div class="modal-header">
+                <h3 id="streamFormatTitle">Select Format</h3>
+                <button class="close-btn" onclick="closeModal('streamFormatModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="streamFormatInfo" style="display:flex;gap:12px;align-items:center;margin-bottom:14px;"></div>
+                <div id="streamFormatLoading" style="text-align:center;padding:20px;color:#888;font-size:13px;">Fetching formats...</div>
+                <div id="streamFormatList" style="display:none;max-height:320px;overflow-y:auto;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-small" onclick="closeModal('streamFormatModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     ` + footerHTML + `
 
     <script src="/lib/utils.js" defer></script>
     <script src="/lib/context-menu.js" defer></script>
     <script src="/lib/upload.js" defer></script>
     <script src="/lib/dashboard.js" defer></script>
+    <script src="/lib/qr.js" defer></script>
     <script>
         const isAuthenticated = ` + authStatus + `;
         // SECURITY FIX: _apiToken is only embedded for authenticated sessions.
@@ -296,6 +319,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             loadFiles();
             // Flush any early click on Download URL button before scripts loaded
             if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
+            // Load QR settings for admin
+            fetch('/admin/settings').then(function(r){return r.json();}).then(function(s){
+                window._qrEnabled = !!s.allow_qr;
+                window._qrLogoURL = s.qr_logo_url || '';
+            }).catch(function(){});
         });
     </script>
 ` + snd.ThemeSnippet("dashboard") + `

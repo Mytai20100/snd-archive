@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -523,24 +524,32 @@ func HandlePublicFiles(w http.ResponseWriter, r *http.Request) {
 				ModTime:       info.ModTime(),
 				DownloadCount: count,
 			},
-			IsPublic: true,
-			Owner:    "admin",
+			IsPublic:    true,
+			Owner:       "admin",
+			PublicToken: perm.PublicToken,
 		})
 	}
 
-	UsersMu.RLock()
-	userList := make([]*UserAccount, 0, len(Users))
-	for _, u := range Users {
-		userList = append(userList, u)
-	}
-	UsersMu.RUnlock()
+	// Only include user public files when the admin has enabled it
+	SiteSettingsMu.RLock()
+	showUserPublic := SiteSettingsData.ShowUserPublicOnShare
+	SiteSettingsMu.RUnlock()
 
-	for _, u := range userList {
-		if !u.IsActive {
-			continue
+	if showUserPublic {
+		UsersMu.RLock()
+		userList := make([]*UserAccount, 0, len(Users))
+		for _, u := range Users {
+			userList = append(userList, u)
 		}
-		userDir := UserPublicDir(u.UUID)
-		walkUserPublicFiles(userDir, u, "", &result)
+		UsersMu.RUnlock()
+
+		for _, u := range userList {
+			if !u.IsActive {
+				continue
+			}
+			userDir := UserPublicDir(u.UUID)
+			walkUserPublicFiles(userDir, u, "", &result)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -586,6 +595,12 @@ func walkUserPublicFiles(dir string, u *UserAccount, relBase string, out *[]File
 		DownloadMu.RLock()
 		count := DownloadCounts[relPath]
 		DownloadMu.RUnlock()
+		tokenVal := ""
+		if exists {
+			tokenVal = perm.PublicToken
+		} else if folderExists {
+			tokenVal = folderPerm.PublicToken
+		}
 		*out = append(*out, FileMetadataWithPermission{
 			FileMetadata: FileMetadata{
 				Name:          displayName,
@@ -594,10 +609,11 @@ func walkUserPublicFiles(dir string, u *UserAccount, relBase string, out *[]File
 				ModTime:       info.ModTime(),
 				DownloadCount: count,
 			},
-			IsPublic: true,
-			Owner:    u.Username,
-			UserUUID: u.UUID,
-			RawPath:  relPath,
+			IsPublic:    true,
+			Owner:       u.Username,
+			UserUUID:    u.UUID,
+			RawPath:     relPath,
+			PublicToken: tokenVal,
 		})
 	}
 }
@@ -1503,6 +1519,12 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "needs_password": true, "wrong_password": true})
 			return
 		}
+		// Zip bomb / dangerous archive
+		if extractErr == errZipBomb || extractErr == errTooManyFiles {
+			log.Printf("[SECURITY] Rejected dangerous archive %s: %v", archivePath, extractErr)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "⚠ " + extractErr.Error()})
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": extractErr.Error()})
 		return
 	}
@@ -1511,13 +1533,72 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-func extractZipArchive(src, destDir string, password string) error {
+// ZIP bomb / dangerous archive limits
+const (
+	maxExtractedBytes  = 4 * 1024 * 1024 * 1024 // 4 GB total uncompressed cap
+	maxExtractFiles    = 10_000                  // max number of entries
+	maxCompressionRatio = 100                    // uncompressed / compressed ratio cap
+)
+
+var errZipBomb = fmt.Errorf("archive rejected: possible zip bomb (exceeds size or ratio limits)")
+var errTooManyFiles = fmt.Errorf("archive rejected: too many entries (limit %d)", maxExtractFiles)
+
+// checkZipBomb analyses a ZIP before extraction.
+// Returns an error if the archive looks dangerous.
+func checkZipBomb(src string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	compressedSize := info.Size()
+	if compressedSize == 0 {
+		compressedSize = 1 // avoid div-by-zero
+	}
+
 	reader, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+
+	if len(reader.File) > maxExtractFiles {
+		return errTooManyFiles
+	}
+
+	var totalUncompressed uint64
+	for _, f := range reader.File {
+		totalUncompressed += f.UncompressedSize64
+		if totalUncompressed > maxExtractedBytes {
+			return errZipBomb
+		}
+	}
+
+	// Compression ratio check (only meaningful if archive is > 1 KB)
+	if compressedSize > 1024 && totalUncompressed > 0 {
+		ratio := int64(totalUncompressed) / compressedSize
+		if ratio > maxCompressionRatio {
+			return errZipBomb
+		}
+	}
+
+	return nil
+}
+
+func extractZipArchive(src, destDir string, password string) error {
+	// ── Zip-bomb check before touching any file ──────────────────────────────
+	if err := checkZipBomb(src); err != nil {
+		return err
+	}
+
+	reader, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
 	safeBase := filepath.ToSlash(filepath.Clean(destDir)) + "/"
+	var totalWritten int64
+
 	for _, f := range reader.File {
 		target := filepath.Join(destDir, filepath.Clean(f.Name))
 		// zip-slip guard: target must be inside destDir
@@ -1549,9 +1630,15 @@ func extractZipArchive(src, destDir string, password string) error {
 			rc.Close()
 			continue
 		}
-		_, copyErr := io.Copy(out, rc)
+		remaining := int64(maxExtractedBytes) - totalWritten
+		n, copyErr := io.Copy(out, io.LimitReader(rc, remaining+1))
+		totalWritten += n
 		out.Close()
 		rc.Close()
+		if totalWritten > int64(maxExtractedBytes) {
+			os.Remove(target)
+			return errZipBomb
+		}
 		if copyErr != nil {
 			errStr := copyErr.Error()
 			if strings.Contains(errStr, "password") || strings.Contains(errStr, "decrypt") ||
@@ -1589,6 +1676,8 @@ func extractTarRaw(src, destDir string) error {
 func extractTarStream(tr *tar.Reader, destDir string) error {
 	// Ensure destDir ends with separator for reliable prefix matching
 	safeBase := filepath.ToSlash(filepath.Clean(destDir)) + "/"
+	var totalWritten int64
+	var fileCount int
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -1596,6 +1685,10 @@ func extractTarStream(tr *tar.Reader, destDir string) error {
 		}
 		if err != nil {
 			return err
+		}
+		fileCount++
+		if fileCount > maxExtractFiles {
+			return errTooManyFiles
 		}
 		target := filepath.Join(destDir, filepath.Clean(header.Name))
 		// tar-slip guard: target must be inside destDir
@@ -1611,8 +1704,14 @@ func extractTarStream(tr *tar.Reader, destDir string) error {
 			if err != nil {
 				continue
 			}
-			io.Copy(out, tr)
+			remaining := int64(maxExtractedBytes) - totalWritten
+			n, _ := io.Copy(out, io.LimitReader(tr, remaining+1))
+			totalWritten += n
 			out.Close()
+			if totalWritten > int64(maxExtractedBytes) {
+				os.Remove(target)
+				return errZipBomb
+			}
 		}
 	}
 	return nil
@@ -1638,7 +1737,11 @@ func extractSingleGz(src, destDir string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, gr)
+	n, err := io.Copy(out, io.LimitReader(gr, maxExtractedBytes+1))
+	if n > maxExtractedBytes {
+		os.Remove(filepath.Join(destDir, outName))
+		return errZipBomb
+	}
 	return err
 }
 
@@ -2662,4 +2765,178 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 		"filename": filename,
 		"size":     written,
 	})
+}
+// ─── Stream Info (yt-dlp metadata) ───────────────────────────────────────────
+
+// StreamFormat holds one downloadable format from yt-dlp.
+type StreamFormat struct {
+	FormatID  string  `json:"format_id"`
+	Ext       string  `json:"ext"`
+	Height    int     `json:"height,omitempty"`
+	Width     int     `json:"width,omitempty"`
+	Filesize  int64   `json:"filesize,omitempty"`
+	VCodec    string  `json:"vcodec,omitempty"`
+	ACodec    string  `json:"acodec,omitempty"`
+	Quality   float64 `json:"quality,omitempty"`
+	FormatNote string `json:"format_note,omitempty"`
+	TBR       float64 `json:"tbr,omitempty"`
+}
+
+// StreamInfo is the condensed metadata returned to the browser.
+type StreamInfo struct {
+	Title      string         `json:"title"`
+	Thumbnail  string         `json:"thumbnail"`
+	Duration   int            `json:"duration"`
+	Uploader   string         `json:"uploader"`
+	Formats    []StreamFormat `json:"formats"`
+	Available  bool           `json:"available"`
+}
+
+// isStreamingURL checks if the URL belongs to a known streaming platform.
+func IsStreamingURL(rawURL string) bool {
+	hosts := []string{
+		"youtube.com", "youtu.be",
+		"vimeo.com",
+		"dailymotion.com",
+		"twitch.tv",
+		"tiktok.com",
+		"instagram.com",
+		"facebook.com", "fb.watch",
+		"twitter.com", "x.com",
+		"reddit.com",
+		"soundcloud.com",
+		"bilibili.com",
+		"nicovideo.jp",
+		"rumble.com",
+		"odysee.com",
+		"loom.com",
+		"streamable.com",
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	// strip www.
+	host = strings.TrimPrefix(host, "www.")
+	for _, h := range hosts {
+		if host == h || strings.HasSuffix(host, "."+h) {
+			return true
+		}
+	}
+	return false
+}
+
+// GET /stream-info?url=...
+// Returns StreamInfo JSON (uses yt-dlp --dump-json).
+func HandleStreamInfo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	rawURL := r.URL.Query().Get("url")
+	if rawURL == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "url required"})
+		return
+	}
+	if err := validateDownloadURL(rawURL); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	ctx := r.Context()
+	cmd := exec.CommandContext(ctx, "yt-dlp", "--dump-json", "--no-playlist", rawURL)
+	out, err := cmd.Output()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "yt-dlp not available or URL not supported"})
+		return
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "failed to parse yt-dlp output"})
+		return
+	}
+
+	info := StreamInfo{Available: true}
+	if v, ok := raw["title"].(string); ok { info.Title = v }
+	if v, ok := raw["thumbnail"].(string); ok { info.Thumbnail = v }
+	if v, ok := raw["uploader"].(string); ok { info.Uploader = v }
+	if v, ok := raw["duration"].(float64); ok { info.Duration = int(v) }
+
+	if fmts, ok := raw["formats"].([]interface{}); ok {
+		for _, fi := range fmts {
+			fm, ok := fi.(map[string]interface{})
+			if !ok { continue }
+			sf := StreamFormat{}
+			if v, ok := fm["format_id"].(string); ok { sf.FormatID = v }
+			if v, ok := fm["ext"].(string); ok { sf.Ext = v }
+			if v, ok := fm["height"].(float64); ok { sf.Height = int(v) }
+			if v, ok := fm["width"].(float64); ok { sf.Width = int(v) }
+			if v, ok := fm["filesize"].(float64); ok { sf.Filesize = int64(v) }
+			if v, ok := fm["vcodec"].(string); ok { sf.VCodec = v }
+			if v, ok := fm["acodec"].(string); ok { sf.ACodec = v }
+			if v, ok := fm["quality"].(float64); ok { sf.Quality = v }
+			if v, ok := fm["format_note"].(string); ok { sf.FormatNote = v }
+			if v, ok := fm["tbr"].(float64); ok { sf.TBR = v }
+			info.Formats = append(info.Formats, sf)
+		}
+	}
+
+	json.NewEncoder(w).Encode(info)
+}
+
+// POST /stream-download  body: {url, format_id, path}
+// Runs yt-dlp to download with specific format into the user's directory.
+func HandleStreamDownload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		URL      string `json:"url"`
+		FormatID string `json:"format_id"`
+		Path     string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "url required"})
+		return
+	}
+	if err := validateDownloadURL(req.URL); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	baseDir, _ := resolveBaseDir(r)
+	saveDir := baseDir
+	if req.Path != "" {
+		rel := filepath.Clean(req.Path)
+		if !strings.HasPrefix(rel, "..") {
+			saveDir = filepath.Join(baseDir, rel)
+		}
+	}
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "cannot create directory"})
+		return
+	}
+
+	args := []string{
+		"--no-playlist",
+		"-o", filepath.Join(saveDir, "%(title)s.%(ext)s"),
+	}
+	if req.FormatID != "" {
+		args = append(args, "-f", req.FormatID)
+	}
+	args = append(args, req.URL)
+
+	ctx := r.Context()
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	outBytes, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(outBytes))
+		if msg == "" { msg = err.Error() }
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": msg})
+		return
+	}
+
+	log.Printf("[STREAM-DOWNLOAD] downloaded from %s (format=%s) to %s", req.URL, req.FormatID, saveDir)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }

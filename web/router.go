@@ -7,7 +7,6 @@ import (
 	"snd-archive/web/pages/admin"
 	"snd-archive/web/pages/dashboard"
 	"snd-archive/web/pages/login"
-	"snd-archive/web/pages/share"
 	"snd-archive/web/pages/userdash"
 )
 
@@ -22,14 +21,17 @@ func SetupRoutes() {
 		// FIX: Apply CF challenge to all browser-facing routes
 		cf := snd.CfChallengeMiddleware
 		http.HandleFunc("/", cf(dashboard.Handler))
-		http.HandleFunc("/share", cf(share.Handler))
 		http.HandleFunc("/my", cf(snd.RequireAuth(userdash.Handler)))
 		http.HandleFunc("/cf-challenge", snd.HandleCFChallenge)
 	} else {
 		http.HandleFunc("/", dashboard.Handler)
-		http.HandleFunc("/share", share.Handler)
 		http.HandleFunc("/my", snd.RequireAuth(userdash.Handler))
 	}
+
+	// /share is deprecated — redirect to root
+	http.HandleFunc("/share", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/", http.StatusMovedPermanently)
+	})
 
 	http.HandleFunc("/ac", login.Handler)
 	http.HandleFunc("/login", snd.HandleLoginSubmit)
@@ -79,6 +81,7 @@ func SetupRoutes() {
 	// ─── New: API view & thumbnail ────────────────────────────────────────────
 	http.HandleFunc("/api/view/", snd.RequireTokenOrAuth(snd.HandleAPIView))
 	http.HandleFunc("/api/lang", snd.HandleLangStrings)
+	http.HandleFunc("/api/qr", snd.HandleQR)
 	http.HandleFunc("/thumbnail/", snd.RequireTokenOrAuth(snd.HandleThumbnail))
 
 	http.HandleFunc("/delete/", snd.RequireAuth(snd.HandleDelete))
@@ -88,6 +91,8 @@ func SetupRoutes() {
 	http.HandleFunc("/zip-view/", snd.HandleZipView)
 	http.HandleFunc("/extract-zip/", snd.RequireAuth(snd.HandleExtractZip))
 	http.HandleFunc("/download-url", snd.RequireAuth(snd.HandleDownloadByURL))
+	http.HandleFunc("/stream-info", snd.RequireAuth(snd.HandleStreamInfo))
+	http.HandleFunc("/stream-download", snd.RequireAuth(snd.HandleStreamDownload))
 
 	// ─── Benchmarks ───────────────────────────────────────────────────────────
 	// M1 FIX: All benchmark endpoints now require at least a valid auth session.
@@ -121,6 +126,11 @@ func SetupRoutes() {
 	http.HandleFunc("/admin/ddos/stats", snd.RequireAdmin(snd.HandleDDoSStats))
 	http.HandleFunc("/admin/ddos/unban", snd.RequireAdmin(snd.HandleDDoSUnban))
 	http.HandleFunc("/admin/ddos/ban", snd.RequireAdmin(snd.HandleDDoSManualBan))
+	http.HandleFunc("/admin/security-logs", snd.RequireAdmin(snd.HandleSecurityLogs))
+	http.HandleFunc("/admin/allowlist", snd.RequireAdmin(snd.HandleListAllowlist))
+	http.HandleFunc("/admin/allowlist/add", snd.RequireAdmin(snd.HandleAddAllowlist))
+	http.HandleFunc("/admin/allowlist/update", snd.RequireAdmin(snd.HandleUpdateAllowlist))
+	http.HandleFunc("/admin/allowlist/delete", snd.RequireAdmin(snd.HandleDeleteAllowlist))
 
 	// ─── Settings ─────────────────────────────────────────────────────────────
 	http.HandleFunc("/admin/settings", snd.RequireAdmin(snd.HandleAdminGetSettings))

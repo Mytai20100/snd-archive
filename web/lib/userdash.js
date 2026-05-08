@@ -140,25 +140,75 @@ function jumpToItem(name) {
 
 function selectAllFiles() {
     if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
-    selectedFiles.clear(); allFiles.forEach(f => selectedFiles.add(f.name));
+    selectedFiles.clear();
+    // Use fullFileName (with currentPath prefix) — same as what toggleFileSelect receives
+    allFiles.forEach(f => {
+        const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
+        selectedFiles.add(fullFileName);
+    });
     document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = true);
     updateBulkCount();
 }
 function deselectAll() {
-    selectedFiles.clear(); document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
-    bulkMode = false; document.getElementById('bulkActions').classList.remove('active');
-}
-function toggleFileSelect(filename, checkbox) {
-    if (checkbox.checked) { selectedFiles.add(filename); if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); } }
-    else { selectedFiles.delete(filename); if (!selectedFiles.size) { bulkMode = false; document.getElementById('bulkActions').classList.remove('active'); } }
+    selectedFiles.clear();
+    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+    bulkMode = false;
+    document.getElementById('bulkActions').classList.remove('active');
     updateBulkCount();
 }
-function updateBulkCount() { document.getElementById('selectedCount').textContent = selectedFiles.size + ' selected'; }
+function toggleFileSelect(filename, checkbox) {
+    if (checkbox.checked) {
+        selectedFiles.add(filename);
+        if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
+    } else {
+        selectedFiles.delete(filename);
+        if (!selectedFiles.size) { bulkMode = false; document.getElementById('bulkActions').classList.remove('active'); }
+    }
+    updateBulkCount();
+}
+function updateBulkCount() {
+    const el = document.getElementById('selectedCount');
+    if (el) el.textContent = selectedFiles.size + ' ' + _t('ui_selected', 'selected');
+}
 function downloadSelectedAsZip() {
-    if (!selectedFiles.size) return;
-    fetch('/zip-multiple', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: Array.from(selectedFiles) }) })
-        .then(r => r.blob()).then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'files_' + Date.now() + '.zip'; a.click(); showToast(_t('toast_downloaded_zip','Downloaded as ZIP'), 'success'); })
-        .catch(() => showToast(_t('toast_error_zip','Failed to create ZIP'), 'error'));
+    if (!selectedFiles.size) { showToast(_t('toast_select_files', 'Select files first'), 'error'); return; }
+    const token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
+    const hdrs = { 'Content-Type': 'application/json' };
+    if (token) hdrs['Authorization'] = 'Bearer ' + token;
+    showToast(_t('msg_preparing_zip', 'Preparing ZIP…'), 'success');
+    fetch('/zip-multiple', { method: 'POST', headers: hdrs, body: JSON.stringify({ files: Array.from(selectedFiles) }) })
+        .then(r => { if (!r.ok) throw new Error('Server error ' + r.status); return r.blob(); })
+        .then(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'files_' + Date.now() + '.zip';
+            a.click();
+            showToast(_t('toast_downloaded_zip', 'Downloaded as ZIP'), 'success');
+        })
+        .catch(e => showToast(_t('toast_error_zip', 'Failed to create ZIP') + ': ' + e.message, 'error'));
+}
+function deleteSelectedFiles() {
+    if (!selectedFiles.size) { showToast(_t('toast_select_files', 'Select files first'), 'error'); return; }
+    const count = selectedFiles.size;
+    showConfirm(
+        _t('confirm_delete_selected', 'Delete {n} selected file(s)?').replace('{n}', count),
+        async function() {
+            const token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
+            const hdrs = { 'Authorization': 'Bearer ' + token };
+            let done = 0, failed = 0;
+            const files = Array.from(selectedFiles);
+            for (const filename of files) {
+                try {
+                    const res = await fetch('/delete/' + encodeURIComponent(filename), { method: 'DELETE', headers: hdrs });
+                    if (res.ok) done++; else failed++;
+                } catch(e) { failed++; }
+            }
+            deselectAll();
+            loadFiles();
+            if (failed === 0) showToast(_t('toast_deleted_n', 'Deleted {n} file(s)').replace('{n}', done), 'success');
+            else showToast('Deleted ' + done + ', failed ' + failed, failed > 0 ? 'error' : 'success');
+        }
+    );
 }
 
 function loadFiles() {
@@ -249,6 +299,7 @@ function loadFiles() {
             html += '<div class="context-menu-item" onclick="renameFile(\'' + esc + '\')">'+_t('ctx_rename','Rename')+'</div>';
             html += '<div class="context-menu-item" onclick="duplicateFile(\'' + esc + '\')">'+_t('ctx_duplicate','Duplicate')+'</div>';
             html += '<div class="context-menu-item danger" onclick="deleteFile(\'' + esc + '\')">'+_t('ctx_delete','Delete')+'</div>';
+            if (window._qrEnabled) html += '<div class="context-menu-item" onclick="generateQR(\'' + esc + '\')">Generate QR</div>';
             html += '</div></div></div>';
         });
         section.innerHTML = html;
@@ -518,20 +569,282 @@ function _skeletonHTML(rows) {
     return html;
 }
 
+// ─── Download URL Modal (streaming-aware) ──────────────────────────────────
+
 var _dlQueue = [];
 var _dlQueueIdSeq = 0;
+var _dlStreamInfo = null;   // cached StreamInfo from /stream-info
+var _dlCurrentTab = 'video';
+var _dlDetectTimer = null;
+
+// Known streaming platform host patterns
+var _dlStreamingHosts = [
+    'youtube.com','youtu.be','vimeo.com','dailymotion.com','twitch.tv',
+    'tiktok.com','instagram.com','facebook.com','fb.watch','twitter.com',
+    'x.com','reddit.com','soundcloud.com','bilibili.com','nicovideo.jp',
+    'rumble.com','odysee.com','loom.com','streamable.com'
+];
+
+function _dlIsStreamingURL(rawUrl) {
+    try {
+        var u = new URL(rawUrl);
+        var host = u.hostname.replace(/^www\./, '').toLowerCase();
+        return _dlStreamingHosts.some(function(h) { return host === h || host.endsWith('.' + h); });
+    } catch(e) { return false; }
+}
 
 function openDownloadURLModal() {
-    const inp = document.getElementById('dlUrlInput');
+    var inp = document.getElementById('dlUrlInput');
     if (inp) inp.value = '';
+    _dlStreamInfo = null;
+    _dlResetStreamPanel();
     var modal = document.getElementById('downloadURLModal');
-    if (modal) { modal.style.display = 'flex'; }
+    if (modal) modal.style.display = 'flex';
     setTimeout(function() { if (inp) inp.focus(); }, 50);
     _renderDlQueue();
 }
+
 document.addEventListener('DOMContentLoaded', function() {
     if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
 });
+
+// Called on every keystroke in the URL input
+function _dlOnUrlChange(val) {
+    clearTimeout(_dlDetectTimer);
+    var url = val.trim();
+    if (!url) { _dlResetStreamPanel(); return; }
+
+    if (_dlIsStreamingURL(url)) {
+        document.getElementById('dlUrlBtn').textContent = 'Fetch Info';
+        document.getElementById('dlDirectDesc').style.display = 'none';
+        // debounce: auto-fetch after 900ms of no typing
+        _dlDetectTimer = setTimeout(function() { _dlFetchStreamInfo(url); }, 900);
+    } else {
+        _dlResetStreamPanel();
+        document.getElementById('dlUrlBtn').textContent = 'Download';
+        document.getElementById('dlDirectDesc').style.display = 'block';
+    }
+}
+
+function _dlResetStreamPanel() {
+    var panel = document.getElementById('dlStreamPanel');
+    if (panel) panel.style.display = 'none';
+    _dlStreamInfo = null;
+    var btn = document.getElementById('dlUrlBtn');
+    if (btn) { btn.textContent = 'Fetch Info'; btn.classList.remove('loading'); }
+}
+
+function _dlHandleEnter() {
+    var url = (document.getElementById('dlUrlInput') || {}).value;
+    if (!url) return;
+    url = url.trim();
+    if (_dlIsStreamingURL(url)) {
+        _dlFetchStreamInfo(url);
+    } else {
+        confirmDownloadURL();
+    }
+}
+
+async function _dlFetchStreamInfo(url) {
+    var btn = document.getElementById('dlUrlBtn');
+    if (btn) { btn.textContent = 'Loading…'; btn.classList.add('loading'); }
+
+    try {
+        var token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
+        var hdrs = {};
+        if (token) hdrs['Authorization'] = 'Bearer ' + token;
+        var res = await fetch('/stream-info?url=' + encodeURIComponent(url), { headers: hdrs });
+        var info = await res.json();
+
+        if (btn) { btn.textContent = 'Fetch Info'; btn.classList.remove('loading'); }
+
+        if (info.error || !info.available) {
+            // Fall back to direct download
+            showToast('yt-dlp unavailable, will use direct download', 'info');
+            _dlResetStreamPanel();
+            document.getElementById('dlDirectDesc').style.display = 'block';
+            document.getElementById('dlUrlBtn').textContent = 'Download';
+            return;
+        }
+
+        _dlStreamInfo = info;
+        _dlRenderStreamPanel(info);
+    } catch(e) {
+        if (btn) { btn.textContent = 'Fetch Info'; btn.classList.remove('loading'); }
+        showToast('Could not fetch stream info', 'error');
+    }
+}
+
+function _dlRenderStreamPanel(info) {
+    // Thumbnail + meta
+    var thumb = document.getElementById('dlThumb');
+    var title = document.getElementById('dlVideoTitle');
+    var meta  = document.getElementById('dlVideoMeta');
+    if (thumb) { thumb.src = info.thumbnail || ''; thumb.style.display = info.thumbnail ? '' : 'none'; }
+    if (title) title.textContent = info.title || 'Unknown title';
+    if (meta) {
+        var parts = [];
+        if (info.uploader) parts.push(info.uploader);
+        if (info.duration) {
+            var m = Math.floor(info.duration / 60), s = info.duration % 60;
+            parts.push(m + ':' + (s < 10 ? '0' : '') + s);
+        }
+        meta.textContent = parts.join(' · ');
+    }
+
+    // Build video format options (has both video + audio)
+    var videoFmts = (info.formats || []).filter(function(f) {
+        return f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none';
+    }).sort(function(a, b) { return (b.height || 0) - (a.height || 0); });
+
+    // Best combined formats + best+bestaudio merge options
+    var videoSel = document.getElementById('dlVideoSelect');
+    if (videoSel) {
+        videoSel.innerHTML = '';
+        // Add smart presets first
+        ['bestvideo+bestaudio/best','best'].forEach(function(fid) {
+            var label = fid === 'bestvideo+bestaudio/best' ? 'Best Quality (auto merge)' : 'Best Single File';
+            var opt = document.createElement('option');
+            opt.value = fid; opt.textContent = label;
+            videoSel.appendChild(opt);
+        });
+        videoFmts.forEach(function(f) {
+            var label = (f.height ? f.height + 'p' : '') + (f.format_note ? ' ' + f.format_note : '') + ' [' + f.ext + ']';
+            if (f.filesize) label += ' (' + _dlFmtSize(f.filesize) + ')';
+            var opt = document.createElement('option');
+            opt.value = f.format_id; opt.textContent = label.trim();
+            videoSel.appendChild(opt);
+        });
+        if (!videoFmts.length && videoSel.children.length === 2) {
+            var opt = document.createElement('option');
+            opt.value = 'best'; opt.textContent = 'Best available';
+            videoSel.appendChild(opt);
+        }
+    }
+
+    // Audio only
+    var audioFmts = (info.formats || []).filter(function(f) {
+        return (!f.vcodec || f.vcodec === 'none') && f.acodec && f.acodec !== 'none';
+    }).sort(function(a, b) { return (b.tbr || 0) - (a.tbr || 0); });
+
+    var audioSel = document.getElementById('dlAudioSelect');
+    if (audioSel) {
+        audioSel.innerHTML = '';
+        var bestAudio = document.createElement('option');
+        bestAudio.value = 'bestaudio'; bestAudio.textContent = 'Best Audio (auto)';
+        audioSel.appendChild(bestAudio);
+        audioFmts.forEach(function(f) {
+            var label = f.ext.toUpperCase() + (f.tbr ? ' ~' + Math.round(f.tbr) + 'k' : '') + (f.format_note ? ' ' + f.format_note : '');
+            if (f.filesize) label += ' (' + _dlFmtSize(f.filesize) + ')';
+            var opt = document.createElement('option');
+            opt.value = f.format_id; opt.textContent = label.trim();
+            audioSel.appendChild(opt);
+        });
+    }
+
+    _dlSwitchTab('video');
+    document.getElementById('dlStreamPanel').style.display = 'block';
+    document.getElementById('dlDirectDesc').style.display = 'none';
+}
+
+function _dlFmtSize(bytes) {
+    if (!bytes) return '';
+    if (bytes > 1073741824) return (bytes/1073741824).toFixed(1) + ' GB';
+    if (bytes > 1048576) return (bytes/1048576).toFixed(1) + ' MB';
+    return (bytes/1024).toFixed(0) + ' KB';
+}
+
+function _dlSwitchTab(tab) {
+    _dlCurrentTab = tab;
+    ['video','audio','direct'].forEach(function(t) {
+        var btn = document.getElementById('dlTab' + t.charAt(0).toUpperCase() + t.slice(1));
+        var panel = document.getElementById('dlPanel' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (btn) btn.className = 'dl-tab' + (t === tab ? ' dl-tab-active' : '');
+        if (panel) panel.style.display = t === tab ? '' : 'none';
+    });
+}
+
+async function _dlStreamDownload() {
+    var url = (document.getElementById('dlUrlInput') || {}).value;
+    if (!url) return;
+    url = url.trim();
+
+    if (_dlCurrentTab === 'direct') {
+        // Use regular server-side HTTP fetch
+        await _dlDirectFetch(url);
+        return;
+    }
+
+    var selId = _dlCurrentTab === 'audio' ? 'dlAudioSelect' : 'dlVideoSelect';
+    var sel = document.getElementById(selId);
+    var formatId = sel ? sel.value : 'best';
+
+    var id = ++_dlQueueIdSeq;
+    var job = { id, url, filename: (_dlStreamInfo && _dlStreamInfo.title) || url.split('/').pop() || 'video', status: 'pending', error: null };
+    _dlQueue.push(job);
+    _renderDlQueue();
+
+    var pulseTimer = setInterval(function() { if (job.status === 'pending') _renderDlQueue(); }, 800);
+    var btn = document.getElementById('dlStreamBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Downloading…'; }
+
+    try {
+        var token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
+        var hdrs = { 'Content-Type': 'application/json' };
+        if (token) hdrs['Authorization'] = 'Bearer ' + token;
+        var res = await fetch('/stream-download', {
+            method: 'POST', headers: hdrs,
+            body: JSON.stringify({ url, format_id: formatId, path: currentPath || '' })
+        });
+        var d = await res.json();
+        clearInterval(pulseTimer);
+        if (d.success) {
+            job.status = 'done';
+            showToast('Downloaded: ' + job.filename, 'success');
+            loadFiles();
+        } else {
+            job.status = 'error'; job.error = d.error || 'Unknown error';
+            showToast('Download failed: ' + job.error, 'error');
+        }
+    } catch(e) {
+        clearInterval(pulseTimer);
+        job.status = 'error'; job.error = 'Network error';
+        showToast('Network error: ' + e.message, 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Download'; }
+    _renderDlQueue();
+    setTimeout(function() { _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; }); _renderDlQueue(); }, 8000);
+}
+
+async function _dlDirectFetch(url) {
+    var id = ++_dlQueueIdSeq;
+    var job = { id, url, filename: url.split('/').pop().split('?')[0] || 'file', status: 'pending', error: null };
+    _dlQueue.push(job);
+    _renderDlQueue();
+    var pulseTimer = setInterval(function() { if (job.status === 'pending') _renderDlQueue(); }, 800);
+    try {
+        var token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
+        var hdrs = { 'Content-Type': 'application/json' };
+        if (token) hdrs['Authorization'] = 'Bearer ' + token;
+        var res = await fetch('/download-url', { method: 'POST', headers: hdrs, body: JSON.stringify({ url, path: currentPath || '' }) });
+        var d = await res.json();
+        clearInterval(pulseTimer);
+        if (d.success) {
+            job.status = 'done'; job.filename = d.filename || job.filename;
+            showToast('Downloaded: ' + job.filename, 'success');
+            loadFiles();
+        } else {
+            job.status = 'error'; job.error = d.error || 'Unknown error';
+            showToast('Download failed: ' + job.error, 'error');
+        }
+    } catch(e) {
+        clearInterval(pulseTimer);
+        job.status = 'error'; job.error = 'Network error';
+        showToast('Network error: ' + e.message, 'error');
+    }
+    _renderDlQueue();
+    setTimeout(function() { _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; }); _renderDlQueue(); }, 8000);
+}
 
 function _renderDlQueue() {
     var list = document.getElementById('dlUrlQueue');
@@ -557,39 +870,10 @@ function _renderDlQueue() {
     }).join('');
 }
 
+// Legacy function kept for any external calls
 async function confirmDownloadURL() {
-    const inp = document.getElementById('dlUrlInput');
-    const url = inp ? inp.value.trim() : '';
+    var url = (document.getElementById('dlUrlInput') || {}).value;
     if (!url) { showToast(_t('toast_enter_url','Please enter a URL'), 'error'); return; }
-    if (inp) inp.value = '';
-
-    const id = ++_dlQueueIdSeq;
-    const job = { id, url, filename: url.split('/').pop().split('?')[0] || 'file', status: 'pending', error: null };
-    _dlQueue.push(job);
-    _renderDlQueue();
-
-    const pulseTimer = setInterval(function() { if (job.status === 'pending') _renderDlQueue(); }, 800);
-
-    try {
-        const token = typeof USER_TOKEN !== 'undefined' ? USER_TOKEN : '';
-        const hdrs = { 'Content-Type': 'application/json' };
-        if (token) hdrs['Authorization'] = 'Bearer ' + token;
-        const res = await fetch('/download-url', { method: 'POST', headers: hdrs, body: JSON.stringify({ url, path: currentPath || '' }) });
-        const d = await res.json();
-        clearInterval(pulseTimer);
-        if (d.success) {
-            job.status = 'done'; job.filename = d.filename || job.filename;
-            showToast(_t('toast_downloaded_zip','Downloaded') + ': ' + job.filename, 'success');
-            loadFiles();
-        } else {
-            job.status = 'error'; job.error = d.error || 'Unknown error';
-            showToast(_t('toast_error_download','Download failed') + ': ' + job.error, 'error');
-        }
-    } catch(e) {
-        clearInterval(pulseTimer);
-        job.status = 'error'; job.error = 'Network error';
-        showToast(_t('toast_error_network','Network error') + ': ' + e.message, 'error');
-    }
-    _renderDlQueue();
-    setTimeout(function() { _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; }); _renderDlQueue(); }, 8000);
+    url = url.trim();
+    await _dlDirectFetch(url);
 }

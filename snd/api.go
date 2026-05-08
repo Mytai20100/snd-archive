@@ -103,9 +103,21 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			folderPath = ""
 		}
 
+		// If ?u= is present, this is a user-scoped file — look up permissions under uuid/ prefix.
+		fileKey := fullPath
+		folderKey := folderPath
+		if uuid := r.URL.Query().Get("u"); uuid != "" {
+			fileKey = uuid + "/" + fullPath
+			if folderPath != "" {
+				folderKey = uuid + "/" + folderPath
+			} else {
+				folderKey = uuid + "/"
+			}
+		}
+
 		PermissionMu.RLock()
-		filePerm, fileExists := FilePermissions[fullPath]
-		folderPerm, folderExists := FolderPermissions[folderPath]
+		filePerm, fileExists := FilePermissions[fileKey]
+		folderPerm, folderExists := FolderPermissions[folderKey]
 		PermissionMu.RUnlock()
 
 		// Logged-in or API-token holders bypass public-token check entirely.
@@ -123,29 +135,28 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Anonymous access: require matching public token (pt= param).
-		// This prevents guessing public URLs without the token.
+		// Anonymous access: allow if file or folder is marked public.
+		// pt= token is accepted as an optional extra-validation mechanism but is
+		// not required — a file set to PUBLIC is always accessible by direct URL.
 		pt := r.URL.Query().Get("pt")
 
 		fileIsPublic := fileExists && filePerm.IsPublic
 		folderIsPublic := folderExists && folderPerm.IsPublic
 
-		if fileIsPublic && pt != "" && filePerm.PublicToken != "" && tokenEqual(pt, filePerm.PublicToken) {
-			handler(w, r)
-			return
-		}
-		if folderIsPublic && pt != "" && folderPerm.PublicToken != "" && tokenEqual(pt, folderPerm.PublicToken) {
-			handler(w, r)
-			return
+		// If a pt= token is provided, validate it for extra security; accept if it matches.
+		if pt != "" {
+			if fileIsPublic && filePerm.PublicToken != "" && tokenEqual(pt, filePerm.PublicToken) {
+				handler(w, r)
+				return
+			}
+			if folderIsPublic && folderPerm.PublicToken != "" && tokenEqual(pt, folderPerm.PublicToken) {
+				handler(w, r)
+				return
+			}
 		}
 
-		// Fallback: if a public file somehow has no PublicToken set (legacy data),
-		// allow access so existing shares keep working. New shares always get a token.
-		if fileIsPublic && filePerm.PublicToken == "" {
-			handler(w, r)
-			return
-		}
-		if folderIsPublic && folderPerm.PublicToken == "" {
+		// No pt= required: if the file/folder is public, allow direct access.
+		if fileIsPublic || folderIsPublic {
 			handler(w, r)
 			return
 		}

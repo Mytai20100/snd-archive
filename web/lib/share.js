@@ -15,34 +15,44 @@ function setPreviewFiles(files) { _shareFiles = files; }
 
 // ── URL builders ──────────────────────────────────────────────────────────────
 
+function _appendPt(url, f) {
+    if (f.public_token) return url + '&pt=' + encodeURIComponent(f.public_token);
+    return url;
+}
+
 function buildRawUrl(f) {
     if (f.user_uuid && f.raw_path)
-        return window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
-    return window.location.origin + '/raw/' + encodeURIComponent(f.name);
+        return _appendPt(window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid), f);
+    const base = window.location.origin + '/raw/' + encodeURIComponent(f.name);
+    return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
 function buildStreamUrl(f) {
     if (f.user_uuid && f.raw_path)
-        return '/stream/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
-    return '/stream/' + encodeURIComponent(f.name);
+        return _appendPt('/stream/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid), f);
+    const base = '/stream/' + encodeURIComponent(f.name);
+    return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
 function buildApiViewUrl(f) {
     if (f.user_uuid && f.raw_path)
-        return '/api/view/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
-    return '/api/view/' + encodeURIComponent(f.name);
+        return _appendPt('/api/view/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid), f);
+    const base = '/api/view/' + encodeURIComponent(f.name);
+    return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
 function buildThumbnailUrl(f) {
     if (f.user_uuid && f.raw_path)
-        return '/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid);
-    return '/thumbnail/' + encodeURIComponent(f.name);
+        return _appendPt('/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid), f);
+    const base = '/thumbnail/' + encodeURIComponent(f.name);
+    return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
 function buildDownloadUrl(f) {
     if (f.user_uuid && f.raw_path)
-        return '/download/' + encodeURIComponent(f.raw_path) + '?u=' + f.user_uuid;
-    return '/download/' + encodeURIComponent(f.name);
+        return _appendPt('/download/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid), f);
+    const base = '/download/' + encodeURIComponent(f.name);
+    return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
 // ── Load & stats ──────────────────────────────────────────────────────────────
@@ -115,8 +125,8 @@ function renderFiles(files) {
         const isUser     = !!f.user_uuid;
         const ownerLabel = f.owner
             ? (isUser
-                ? '<span class="file-owner-tag">@' + escapeHtml(f.owner) + '</span>'
-                : '<span class="file-owner-tag file-owner-admin">admin</span>')
+                ? '<span style="font-size:10px;font-weight:600;color:#2e7d32;background:#e8f5e9;border:1px solid #c8e6c9;padding:1px 6px;border-radius:999px;margin-left:6px;">user:' + escapeHtml(f.owner) + '</span>'
+                : '<span style="font-size:10px;font-weight:600;color:#3949ab;background:#e8eaf6;border:1px solid #c5cae9;padding:1px 6px;border-radius:999px;margin-left:6px;">admin</span>')
             : '';
 
         const canPreview = ['image', 'text', 'video', 'audio'].includes(f.type);
@@ -138,8 +148,8 @@ function renderFiles(files) {
             '<div class="file-info">' +
             '<div class="file-name">' + escapeHtml(f.name) +
             '<span class="file-type-badge" style="' + typeBadge + '">' + f.type + '</span>' +
+            ownerLabel +
             '</div>' +
-            (ownerLabel ? '<div class="file-uploader">' + ownerLabel + '</div>' : '') +
             '<div class="file-meta">' + formatFileSize(f.size) + ' &middot; ' + modDate +
             (f.download_count > 0 ? ' &middot; ' + f.download_count + ' downloads' : '') + '</div>' +
             '<div class="file-url" onclick="copyFileLink(' + idx + ')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>' +

@@ -10,6 +10,8 @@ function switchTab(name) {
     if (name === 'nodes') loadNodes();
     if (name === 'ddos') loadDDoS();
     if (name === 'settings') loadAdminSettings();
+    if (name === 'seclog') loadSecurityLogs();
+    if (name === 'allowlist') loadAllowlist();
 }
 
 let editingUser = null;
@@ -686,6 +688,12 @@ async function loadAdminSettings() {
         document.getElementById('as-direct-links').checked = !!s.show_direct_links;
         const hf = document.getElementById('as-hide-footer');
         if (hf) hf.checked = !!s.hide_footer;
+        const aq = document.getElementById('as-allow-qr');
+        if (aq) { aq.checked = !!s.allow_qr; document.getElementById('as-qr-logo-row').style.display = s.allow_qr ? '' : 'none'; aq.onchange = function() { document.getElementById('as-qr-logo-row').style.display = this.checked ? '' : 'none'; }; }
+        const ql = document.getElementById('as-qr-logo');
+        if (ql) ql.value = s.qr_logo_url || '';
+        const sup = document.getElementById('as-show-user-public');
+        if (sup) sup.checked = !!s.show_user_public_on_share;
         const cc = document.getElementById('as-custom-css');
         if (cc) cc.value = s.custom_css||'';
         const et = document.getElementById('as-embed-title');
@@ -708,6 +716,9 @@ async function saveAdminSettings() {
         allow_user_theme: document.getElementById('as-allow-theme').checked,
         show_direct_links: document.getElementById('as-direct-links').checked,
         hide_footer: !!(document.getElementById('as-hide-footer') || {}).checked,
+        allow_qr: !!(document.getElementById('as-allow-qr') || {}).checked,
+        qr_logo_url: (document.getElementById('as-qr-logo') || {}).value || '',
+        show_user_public_on_share: !!(document.getElementById('as-show-user-public') || {}).checked,
         custom_css: (document.getElementById('as-custom-css') || {}).value || '',
         embed_title: (document.getElementById('as-embed-title') || {}).value || '',
         embed_description: (document.getElementById('as-embed-desc') || {}).value || '',
@@ -716,14 +727,77 @@ async function saveAdminSettings() {
     };
     const res = await fetch('/admin/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
     if (res.ok) {
-        showToast(_t('toast_settings_saved','Settings saved successfully'), 'success');
         applyBgMusic(s.bg_music_url);
         // Apply custom CSS live
         let styleTag = document.getElementById('_adminCustomCSS');
         if (!styleTag) { styleTag = document.createElement('style'); styleTag.id = '_adminCustomCSS'; document.head.appendChild(styleTag); }
         styleTag.textContent = s.custom_css || '';
+        showSaveSuccessPopup(_t('toast_settings_saved', 'Settings saved successfully'));
     } else {
-        showToast(_t('toast_error_settings','Failed to save settings'), 'error');
+        showSaveErrorPopup(_t('toast_error_settings', 'Failed to save settings'));
+    }
+}
+
+function showSaveSuccessPopup(msg) {
+    _showSavePopup(msg, true);
+}
+
+function showSaveErrorPopup(msg) {
+    _showSavePopup(msg, false);
+}
+
+function _showSavePopup(msg, success) {
+    const existing = document.getElementById('_savePopup');
+    if (existing) existing.remove();
+    const popup = document.createElement('div');
+    popup.id = '_savePopup';
+    const bgColor   = success ? '#e8f5e9' : '#ffebee';
+    const borderColor = success ? '#a5d6a7' : '#ef9a9a';
+    const iconColor = success ? '#2e7d32' : '#c62828';
+    const icon = success ? 'Settings Saved' : 'Save Failed';
+    popup.style.cssText = [
+        'position:fixed',
+        'top:50%',
+        'left:50%',
+        'transform:translate(-50%,-50%) scale(0.85)',
+        'z-index:10000',
+        'background:#fff',
+        'border-radius:10px',
+        'box-shadow:0 8px 40px rgba(0,0,0,0.22)',
+        'padding:32px 40px',
+        'min-width:280px',
+        'max-width:360px',
+        'text-align:center',
+        'opacity:0',
+        'transition:opacity 0.2s,transform 0.2s',
+        'pointer-events:auto'
+    ].join(';');
+    popup.innerHTML =
+        '<div style="width:52px;height:52px;border-radius:50%;background:' + bgColor + ';border:2px solid ' + borderColor + ';display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">' +
+        '<span style="font-size:22px;color:' + iconColor + ';font-weight:700;">' + (success ? '&#10003;' : '&#10007;') + '</span>' +
+        '</div>' +
+        '<div style="font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">' + icon + '</div>' +
+        '<div style="font-size:13px;color:#555;margin-bottom:20px;">' + escapeHtml(msg) + '</div>' +
+        '<button id="_savePopupOK" style="padding:8px 28px;background:#1a1a1a;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">OK</button>';
+    // Backdrop
+    const backdrop = document.createElement('div');
+    backdrop.id = '_savePopupBackdrop';
+    backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.32);z-index:9999;';
+    backdrop.onclick = function() { popup.remove(); backdrop.remove(); };
+    document.body.appendChild(backdrop);
+    document.body.appendChild(popup);
+    requestAnimationFrame(function() {
+        popup.style.opacity = '1';
+        popup.style.transform = 'translate(-50%,-50%) scale(1)';
+    });
+    document.getElementById('_savePopupOK').onclick = function() { popup.remove(); backdrop.remove(); };
+    // Auto-dismiss after 3s on success
+    if (success) {
+        setTimeout(function() {
+            popup.style.opacity = '0';
+            popup.style.transform = 'translate(-50%,-50%) scale(0.85)';
+            setTimeout(function() { if (popup.parentNode) popup.remove(); if (backdrop.parentNode) backdrop.remove(); }, 200);
+        }, 3000);
     }
 }
 
@@ -791,6 +865,13 @@ async function loadUserSettings() {
         document.getElementById('us-music').value = s.bg_music_url||'';
         document.getElementById('us-lang').value = s.language||'en';
         document.getElementById('us-direct-links').checked = !!s.show_direct_links;
+        // Show QR row only when admin has enabled QR globally
+        const qrRow = document.getElementById('us-qr-row');
+        const qrChk = document.getElementById('us-enable-qr');
+        if (qrRow && qrChk) {
+            qrRow.style.display = data.allow_qr ? '' : 'none';
+            qrChk.checked = !!s.enable_qr;
+        }
         if (s.bg_music_url) applyBgMusic(s.bg_music_url);
     } catch(e) { console.error('loadUserSettings:', e); }
 }
@@ -800,7 +881,8 @@ async function saveUserSettings() {
         background_url: document.getElementById('us-bg').value,
         bg_music_url: document.getElementById('us-music').value,
         language: document.getElementById('us-lang').value,
-        show_direct_links: document.getElementById('us-direct-links').checked
+        show_direct_links: document.getElementById('us-direct-links').checked,
+        enable_qr: !!(document.getElementById('us-enable-qr') || {}).checked
     };
     const res = await fetch('/user/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
     if (res.ok) { showToast(_t('toast_settings_saved','Settings saved')); applyBgMusic(s.bg_music_url); }
@@ -855,3 +937,180 @@ function showToast(msg) {
 }
 
 loadUserSettings();
+
+// ─── Security Log ──────────────────────────────────────────────────────────────
+
+const _secEvtLabels = {
+    login_fail:   { label: 'Login Fail',    color: '#e65100', bg: '#fff3e0' },
+    login_ban:    { label: 'Login Ban',     color: '#b71c1c', bg: '#ffebee' },
+    ddos_ban:     { label: 'DDoS Ban',      color: '#880e4f', bg: '#fce4ec' },
+    ddos_block:   { label: 'DDoS Block',    color: '#6a1b9a', bg: '#f3e5f5' },
+    archive_bomb: { label: 'Archive Bomb',  color: '#1b5e20', bg: '#e8f5e9' },
+};
+
+async function loadSecurityLogs() {
+    const tbody = document.getElementById('seclogTableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#999;">Loading…</td></tr>';
+    try {
+        const res = await fetch('/admin/security-logs');
+        const events = await res.json();
+        const filter = (document.getElementById('seclogFilter') || {}).value || '';
+        const filtered = filter ? events.filter(e => e.event_type === filter) : events;
+        if (!filtered.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#999;">No events' + (filter ? ' for this filter' : '') + '.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = filtered.map(e => {
+            const meta = _secEvtLabels[e.event_type] || { label: e.event_type, color: '#555', bg: '#f5f5f5' };
+            const time = new Date(e.time).toLocaleString();
+            const badge = '<span style="display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;background:' + meta.bg + ';color:' + meta.color + ';">' + meta.label + '</span>';
+            const allowBtn = (e.event_type === 'login_ban' || e.event_type === 'ddos_ban')
+                ? '<button onclick="quickAllow(\'' + escapeHtml(e.ip) + '\')" style="padding:2px 8px;font-size:11px;border:1px solid #4caf50;color:#2e7d32;background:#fff;border-radius:3px;cursor:pointer;" title="Add to Allowlist">Allow</button>'
+                : '';
+            return '<tr>'
+                + '<td style="font-family:monospace;font-size:11px;white-space:nowrap;">' + time + '</td>'
+                + '<td style="font-family:monospace;font-weight:500;">' + escapeHtml(e.ip) + '</td>'
+                + '<td>' + badge + '</td>'
+                + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(e.reason) + '">' + escapeHtml(e.reason) + '</td>'
+                + '<td style="color:#888;">' + escapeHtml(e.username || '—') + '</td>'
+                + '<td>' + allowBtn + '</td>'
+                + '</tr>';
+        }).join('');
+    } catch(e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="color:#d32f2f;padding:12px;">Failed to load: ' + e.message + '</td></tr>';
+    }
+}
+
+async function quickAllow(ip) {
+    _showAllowModal('Add to Allowlist: ' + ip, ip, '', async (newIp, label) => {
+        try {
+            const res = await fetch('/admin/allowlist/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: newIp, label: label || '' })
+            });
+            const d = await res.json();
+            if (d.success) { showSaveSuccessPopup('Added ' + newIp + ' to allowlist'); loadSecurityLogs(); }
+            else showSaveErrorPopup('Failed: ' + (d.error || 'unknown'));
+        } catch(e) { showSaveErrorPopup('Network error'); }
+    });
+}
+
+// ─── Allowlist ──────────────────────────────────────────────────────────────
+
+async function loadAllowlist() {
+    const container = document.getElementById('allowlistContainer');
+    if (!container) return;
+    container.innerHTML = '<div style="color:#999;padding:16px;">Loading…</div>';
+    try {
+        const res = await fetch('/admin/allowlist');
+        const entries = await res.json();
+        if (!entries || !entries.length) {
+            container.innerHTML = '<div style="color:#999;padding:16px;">No trusted IPs configured. Click "+ Add IP" to add one.</div>';
+            return;
+        }
+        let html = '<table class="logs-table" style="width:100%;">'
+            + '<thead><tr><th>IP / CIDR / Prefix</th><th>Label</th><th>Added</th><th style="width:150px;">Actions</th></tr></thead><tbody>';
+        entries.forEach(e => {
+            const added = e.created_at ? new Date(e.created_at).toLocaleDateString() : '—';
+            html += '<tr>'
+                + '<td style="font-family:monospace;font-weight:500;">' + escapeHtml(e.ip) + '</td>'
+                + '<td>' + escapeHtml(e.label || '—') + '</td>'
+                + '<td style="color:#888;font-size:12px;">' + added + '</td>'
+                + '<td style="display:flex;gap:6px;">'
+                + '<button class="btn" style="padding:4px 10px;font-size:12px;" onclick="promptEditAllowEntry(\'' + escapeHtml(e.id) + '\',\'' + escapeHtml(e.ip) + '\',\'' + escapeHtml(e.label||'') + '\')">Edit</button>'
+                + '<button class="btn" style="padding:4px 10px;font-size:12px;background:#d32f2f;" onclick="deleteAllowEntry(\'' + escapeHtml(e.id) + '\',\'' + escapeHtml(e.ip) + '\')">Delete</button>'
+                + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } catch(e) {
+        container.innerHTML = '<div style="color:#d32f2f;padding:12px;">Failed to load: ' + e.message + '</div>';
+    }
+}
+
+function _showAllowModal(title, ipVal, labelVal, onSave) {
+    const existing = document.getElementById('_allowModal');
+    if (existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = '_allowModal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45)';
+    modal.innerHTML = `
+        <div style="background:#fff;border-radius:8px;padding:28px 24px;min-width:340px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+            <div style="font-size:16px;font-weight:600;margin-bottom:16px;">${escapeHtml(title)}</div>
+            <label style="font-size:13px;color:#555;display:block;margin-bottom:4px;">IP / CIDR / Prefix</label>
+            <input id="_allowIp" type="text" value="${escapeHtml(ipVal)}"
+                placeholder="e.g. 203.0.113.42 or 192.168. or 10.0.0.0/8"
+                style="width:100%;padding:9px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;">
+            <label style="font-size:13px;color:#555;display:block;margin-bottom:4px;">Label (optional)</label>
+            <input id="_allowLabel" type="text" value="${escapeHtml(labelVal)}"
+                placeholder="e.g. Office IP, Home server..."
+                style="width:100%;padding:9px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px;box-sizing:border-box;margin-bottom:18px;">
+            <div style="font-size:11px;color:#888;margin-bottom:16px;">
+                Supports exact IPs, prefixes (e.g. <code>192.168.</code>), and CIDR blocks.
+                Matching IPs bypass DDoS rate-limiting completely.
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button onclick="document.getElementById('_allowModal').remove()"
+                    style="padding:7px 18px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:13px;">Cancel</button>
+                <button id="_allowSaveBtn"
+                    style="padding:7px 18px;border:none;border-radius:4px;background:#1a1a1a;color:#fff;cursor:pointer;font-size:13px;">Save</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    document.getElementById('_allowSaveBtn').addEventListener('click', () => {
+        const ip = document.getElementById('_allowIp').value.trim();
+        const label = document.getElementById('_allowLabel').value.trim();
+        if (!ip) { showConfirm('IP is required', null, null, true); return; }
+        modal.remove();
+        onSave(ip, label);
+    });
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    setTimeout(() => { const inp = document.getElementById('_allowIp'); if (inp) inp.focus(); }, 50);
+}
+
+function promptAddAllowEntry() {
+    _showAllowModal('Add Trusted IP', '', '', async (ip, label) => {
+        try {
+            const res = await fetch('/admin/allowlist/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip, label })
+            });
+            const d = await res.json();
+            if (d.success) { showSaveSuccessPopup('Added ' + ip + ' to allowlist'); loadAllowlist(); }
+            else showSaveErrorPopup('Failed: ' + (d.error || 'unknown'));
+        } catch(e) { showSaveErrorPopup('Network error'); }
+    });
+}
+
+function promptEditAllowEntry(id, ip, label) {
+    _showAllowModal('Edit Trusted IP', ip, label, async (newIp, newLabel) => {
+        try {
+            const res = await fetch('/admin/allowlist/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, ip: newIp, label: newLabel })
+            });
+            const d = await res.json();
+            if (d.success) { showSaveSuccessPopup('Saved changes for ' + newIp); loadAllowlist(); }
+            else showSaveErrorPopup('Failed: ' + (d.error || 'unknown'));
+        } catch(e) { showSaveErrorPopup('Network error'); }
+    });
+}
+
+async function deleteAllowEntry(id, ip) {
+    showConfirm('Remove ' + ip + ' from allowlist?', async () => {
+        try {
+            const res = await fetch('/admin/allowlist/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            const d = await res.json();
+            if (d.success) { showSaveSuccessPopup('Removed ' + ip + ' from allowlist'); loadAllowlist(); }
+            else showSaveErrorPopup('Failed: ' + (d.error || 'unknown'));
+        } catch(e) { showSaveErrorPopup('Network error'); }
+    });
+}

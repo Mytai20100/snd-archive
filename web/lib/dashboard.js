@@ -171,7 +171,10 @@ function jumpToItem(name) {
 function selectAllFiles() {
     if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
     selectedFiles.clear();
-    allFiles.forEach(f => selectedFiles.add(f.name));
+    allFiles.forEach(f => {
+        const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
+        selectedFiles.add(fullFileName);
+    });
     document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = true);
     updateBulkCount();
 }
@@ -220,14 +223,17 @@ function bulkDelete() {
 function downloadSelectedAsZip() {
     if (!selectedFiles.size) return;
     const files = Array.from(selectedFiles);
+    showToast(_t('msg_preparing_zip', 'Preparing ZIP\u2026'), 'success');
     fetch('/zip-multiple', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }) })
-        .then(r => r.blob()).then(blob => {
+        .then(r => { if (!r.ok) throw new Error('Server error ' + r.status); return r.blob(); })
+        .then(blob => {
+            if (blob.size === 0) throw new Error('ZIP is empty');
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = 'files_' + Date.now() + '.zip';
             a.click();
             showToast(_t('toast_downloaded_zip','Downloaded as ZIP'), 'success');
-        }).catch(() => showToast(_t('toast_error_zip','Failed to create ZIP'), 'error'));
+        }).catch(e => showToast(_t('toast_error_zip','Failed to create ZIP') + ': ' + e.message, 'error'));
 }
 
 function loadFiles() {
@@ -360,15 +366,99 @@ function loadFiles() {
                     html += '<div class="context-menu-item" onclick="duplicateFile(\'' + esc + '\')">'+_t('ctx_duplicate','Duplicate')+'</div>';
                     html += '<div class="context-menu-item danger" onclick="deleteFile(\'' + esc + '\')">'+_t('ctx_delete','Delete')+'</div>';
                 }
+                if (window._qrEnabled) html += '<div class="context-menu-item" onclick="generateQR(\'' + esc + '\')">Generate QR</div>';
                 html += '</div></div></div>';
             });
 
             section.innerHTML = html;
+
+            // When unauthenticated: also load user public files and append them
+            if (!isAuthenticated && !currentPath) {
+                _loadUserPublicSection(section);
+            }
         })
         .catch(() => {
             document.getElementById('filesSection').innerHTML =
                 '<div class="empty-state">Error loading files. Please refresh.</div>';
         });
+}
+
+// Fetch /public-files and append user-contributed public files below admin files
+function _loadUserPublicSection(section) {
+    fetch('/public-files')
+        .then(r => r.json())
+        .then(entries => {
+            // Filter only user files (have user_uuid)
+            const userFiles = (entries || []).filter(f => !!f.user_uuid);
+            if (!userFiles.length) return;
+
+            const badgeColors = {
+                text:     'background:#e8f5e9;color:#2e7d32',
+                image:    'background:#e3f2fd;color:#1976d2',
+                video:    'background:#fce4ec;color:#c2185b',
+                audio:    'background:#f3e5f5;color:#7b1fa2',
+                archive:  'background:#fff3e0;color:#f57c00',
+                document: 'background:#ffebee;color:#d32f2f',
+            };
+
+            let html = '<div style="margin-top:24px;padding-top:16px;border-top:2px solid #e0e0e0;">';
+            html += '<div style="font-size:13px;font-weight:600;color:#888;padding:0 12px 10px;text-transform:uppercase;letter-spacing:.04em;">User Public Files</div>';
+
+setPreviewFilesUserPub(userFiles);
+
+            userFiles.forEach((f, idx) => {
+                const rawUrl    = f.user_uuid && f.raw_path
+                    ? window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+                    : window.location.origin + '/raw/' + encodeURIComponent(f.name) + (f.public_token ? '?pt=' + encodeURIComponent(f.public_token) : '');
+                const downloadUrl = f.user_uuid && f.raw_path
+                    ? '/download/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+                    : '/download/' + encodeURIComponent(f.name) + (f.public_token ? '?pt=' + encodeURIComponent(f.public_token) : '');
+                const thumbUrl  = f.user_uuid && f.raw_path
+                    ? '/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+                    : '/thumbnail/' + encodeURIComponent(f.name) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '');
+                const modDate   = f.mod_time ? new Date(f.mod_time).toLocaleDateString() : 'N/A';
+                const typeBadge = badgeColors[f.type] || 'background:#f5f5f5;color:#616161';
+                const ownerTag  = f.owner
+                    ? '<span style="font-size:10px;font-weight:600;color:#2e7d32;background:#e8f5e9;border:1px solid #c8e6c9;padding:1px 6px;border-radius:999px;margin-left:6px;">' + escapeHtml(f.owner) + '</span>'
+                    : '';
+                const escIdx   = '' + idx;
+                const safeUserFileId = 'snd-userpub-' + idx;
+
+                let thumbHtml;
+                if (f.type === 'image' || f.type === 'video') {
+                    thumbHtml = '<div style="width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
+                        '<img src="' + thumbUrl + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">' +
+                        '</div>';
+                } else {
+                    thumbHtml = '<div style="width:72px;height:72px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                        '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                        '</div>';
+                }
+
+                html += '<div class="file-item" id="' + safeUserFileId + '">';
+                html += '<input type="checkbox" class="checkbox file-checkbox" style="visibility:hidden;" disabled>';
+                html += thumbHtml;
+                html += '<div class="file-info">';
+                html += '<div class="file-name">' + escapeHtml(f.name) + '<span class="file-type-badge" style="' + typeBadge + '">' + f.type + '</span>' + ownerTag + '</div>';
+                html += '<div class="file-meta">' + formatFileSize(f.size) + ' · ' + modDate;
+                if (f.download_count > 0) html += ' · ' + f.download_count + ' downloads';
+                html += '</div>';
+                html += '<div class="file-link" onclick="navigator.clipboard.writeText(\'' + rawUrl.replace(/'/g, "\\'") + '\').then(()=>showToast(\'Link copied!\',\'success\'))" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
+                html += '</div>';
+                html += '<div class="file-actions">';
+                html += '<button class="menu-btn" onclick="toggleContextMenu(event,\'' + safeUserFileId + '\');return false;">⋮</button>';
+                html += '<div class="context-menu" id="menu-' + safeUserFileId + '">';
+                html += '<div class="context-menu-item" onclick="viewUserPublicFile(\'' + safeUserFileId + '\',' + escIdx + ')">View</div>';
+                html += '<div class="context-menu-item" onclick="copyLinkUserPub(\'' + rawUrl.replace(/'/g, "\\'") + '\')">Copy Link</div>';
+                html += '<div class="context-menu-item" onclick="downloadAsZipUserPub(\'' + rawUrl.replace(/'/g, "\\'") + '\')">Download as ZIP</div>';
+                html += '</div></div>';
+                html += '</div>';
+            });
+
+            html += '</div>';
+            section.innerHTML += html;
+        })
+        .catch(() => {}); // silent fail — user files are optional
 }
 
 function togglePublicSwitch(filename, isPublic) {
@@ -713,6 +803,30 @@ function _renderDlQueue() {
     }).join('');
 }
 
+function _dlAdminUrlHint(val) {
+    var hint = document.getElementById('dlAdminStreamHint');
+    if (!hint) return;
+    hint.style.display = _isStreamingURL(val.trim()) ? '' : 'none';
+}
+
+// ── Streaming platform detection ─────────────────────────────────────────────
+var _streamingHosts = [
+    'youtube.com','youtu.be','vimeo.com','dailymotion.com','twitch.tv',
+    'tiktok.com','instagram.com','facebook.com','fb.watch',
+    'twitter.com','x.com','reddit.com','soundcloud.com',
+    'bilibili.com','nicovideo.jp','rumble.com','odysee.com',
+    'loom.com','streamable.com'
+];
+function _isStreamingURL(url) {
+    try {
+        var host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+        return _streamingHosts.some(function(h) { return host === h || host.endsWith('.' + h); });
+    } catch(e) { return false; }
+}
+
+// Pending stream download URL (used by format picker)
+var _pendingStreamURL = '';
+
 async function confirmDownloadURL() {
     const inp = document.getElementById('dlUrlInput');
     const url = inp ? inp.value.trim() : '';
@@ -720,6 +834,15 @@ async function confirmDownloadURL() {
         showToast(_t('toast_enter_url','Please enter a URL'), 'error');
         return;
     }
+
+    // If it's a streaming platform URL, show the format picker instead
+    if (_isStreamingURL(url)) {
+        if (inp) inp.value = '';
+        closeModal('downloadURLModal');
+        _showStreamFormatPicker(url);
+        return;
+    }
+
     if (inp) inp.value = '';
 
     const id = ++_dlQueueIdSeq;
@@ -767,4 +890,201 @@ async function confirmDownloadURL() {
         _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; });
         _renderDlQueue();
     }, 8000);
+}
+
+// ── Stream Format Picker ──────────────────────────────────────────────────────
+async function _showStreamFormatPicker(url) {
+    _pendingStreamURL = url;
+    const modal = document.getElementById('streamFormatModal');
+    const titleEl = document.getElementById('streamFormatTitle');
+    const infoEl  = document.getElementById('streamFormatInfo');
+    const loadEl  = document.getElementById('streamFormatLoading');
+    const listEl  = document.getElementById('streamFormatList');
+
+    titleEl.textContent = 'Select Format';
+    infoEl.innerHTML = '';
+    loadEl.style.display = '';
+    loadEl.textContent = 'Fetching available formats…';
+    listEl.style.display = 'none';
+    listEl.innerHTML = '';
+    if (modal) modal.style.display = 'flex';
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (typeof USER_TOKEN !== 'undefined' && USER_TOKEN) headers['Authorization'] = 'Bearer ' + USER_TOKEN;
+
+    try {
+        const res = await fetch('/stream-info?url=' + encodeURIComponent(url), { headers });
+        const info = await res.json();
+        loadEl.style.display = 'none';
+
+        if (info.error) {
+            listEl.style.display = '';
+            listEl.innerHTML = '<div style="color:#c62828;font-size:13px;padding:8px 0;">' + escapeHtml(info.error) + '</div>';
+            return;
+        }
+
+        // Show thumbnail + title
+        if (info.title) titleEl.textContent = info.title;
+        infoEl.innerHTML =
+            (info.thumbnail ? '<img src="' + escapeHtml(info.thumbnail) + '" style="width:80px;height:52px;object-fit:cover;border-radius:4px;flex-shrink:0;">' : '') +
+            '<div><div style="font-size:13px;font-weight:600;color:#1a1a1a;">' + escapeHtml(info.title || url) + '</div>' +
+            (info.uploader ? '<div style="font-size:12px;color:#888;margin-top:2px;">by ' + escapeHtml(info.uploader) + '</div>' : '') +
+            (info.duration  ? '<div style="font-size:12px;color:#888;">' + _fmtDuration(info.duration) + '</div>' : '') + '</div>';
+
+        // Build format list grouped: video+audio first, then audio-only, then other
+        var fmts = (info.formats || []).filter(function(f) { return f.ext && f.ext !== 'none'; });
+
+        // Deduplicate / pick best per resolution
+        var seen = {}; var best = [];
+        fmts.forEach(function(f) {
+            var key = (f.height || 0) + '_' + f.ext + '_' + (f.vcodec && f.vcodec !== 'none' ? 'v' : 'a');
+            if (!seen[key] || (f.filesize || 0) > (seen[key].filesize || 0)) { seen[key] = f; }
+        });
+        Object.values(seen).forEach(function(f) { best.push(f); });
+        best.sort(function(a,b) { return (b.height||0) - (a.height||0) || (b.tbr||0) - (a.tbr||0); });
+
+        // Add a "best quality" auto option at the top
+        var rows = '<div style="padding:8px 0;border-bottom:1px solid #f0f0f0;">' +
+            '<button onclick="_doStreamDownload(\'bestvideo+bestaudio/best\')" style="width:100%;text-align:left;background:none;border:1px solid #1a73e8;border-radius:4px;padding:10px 12px;cursor:pointer;font-size:13px;color:#1a73e8;font-weight:600;">' +
+            'Best quality (auto-merge)</button></div>';
+
+        best.forEach(function(f) {
+            var hasVideo = f.vcodec && f.vcodec !== 'none';
+            var hasAudio = f.acodec && f.acodec !== 'none';
+            var label = hasVideo
+                ? (f.height ? f.height + 'p' : '') + ' ' + f.ext.toUpperCase() + (f.format_note ? ' · ' + f.format_note : '') + (hasAudio ? '' : ' (video only)')
+                : 'Audio · ' + f.ext.toUpperCase() + (f.format_note ? ' · ' + f.format_note : '');
+            var size = f.filesize ? ' · ' + _fmtSize(f.filesize) : '';
+            var tbr  = f.tbr ? ' · ~' + Math.round(f.tbr) + ' kbps' : '';
+            rows += '<div style="padding:6px 0;border-bottom:1px solid #f5f5f5;">' +
+                '<button onclick="_doStreamDownload(\'' + escapeHtml(f.format_id) + '\')" style="width:100%;text-align:left;background:none;border:1px solid #e0e0e0;border-radius:4px;padding:8px 12px;cursor:pointer;font-size:13px;color:#1a1a1a;">' +
+                escapeHtml(label) + '<span style="color:#999;font-size:11px;">' + escapeHtml(size + tbr) + '</span></button></div>';
+        });
+
+        listEl.innerHTML = rows;
+        listEl.style.display = '';
+    } catch(e) {
+        loadEl.style.display = '';
+        loadEl.textContent = 'Error: ' + e.message;
+    }
+}
+
+async function _doStreamDownload(formatId) {
+    closeModal('streamFormatModal');
+    const url = _pendingStreamURL;
+    if (!url) return;
+
+    const id = ++_dlQueueIdSeq;
+    const job = { id, url, filename: 'Downloading…', status: 'pending', pct: null, error: null };
+    _dlQueue.push(job);
+
+    // Re-open download URL modal to show queue progress
+    const dlModal = document.getElementById('downloadURLModal');
+    if (dlModal) dlModal.style.display = 'flex';
+    _renderDlQueue();
+
+    const pulseTimer = setInterval(function() {
+        if (job.status === 'pending') _renderDlQueue();
+    }, 800);
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (typeof USER_TOKEN !== 'undefined' && USER_TOKEN) headers['Authorization'] = 'Bearer ' + USER_TOKEN;
+
+    try {
+        const res = await fetch('/stream-download', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ url, format_id: formatId, path: currentPath || '' })
+        });
+        const d = await res.json();
+        clearInterval(pulseTimer);
+        if (d.success) {
+            job.status = 'done'; job.pct = 100;
+            showToast('Downloaded from stream ✓', 'success');
+            loadFiles();
+        } else {
+            job.status = 'error'; job.error = d.error || 'Unknown error';
+            showToast('Stream download failed: ' + job.error, 'error');
+        }
+    } catch(e) {
+        clearInterval(pulseTimer);
+        job.status = 'error'; job.error = 'Network error';
+    }
+    _renderDlQueue();
+    setTimeout(function() { _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; }); _renderDlQueue(); }, 8000);
+}
+
+function _fmtDuration(s) {
+    var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    return h ? h+':'+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0') : m+':'+String(sec).padStart(2,'0');
+}
+function _fmtSize(b) {
+    if (b >= 1073741824) return (b/1073741824).toFixed(1)+' GB';
+    if (b >= 1048576) return (b/1048576).toFixed(1)+' MB';
+    return (b/1024).toFixed(0)+' KB';
+}
+
+var _userPubFiles = [];
+function setPreviewFilesUserPub(files) { _userPubFiles = files; }
+
+function viewUserPublicFile(safeId, idx) {
+    const f = _userPubFiles[idx];
+    if (!f) return;
+    const thumbUrl = f.user_uuid && f.raw_path
+        ? '/thumbnail/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+        : '/thumbnail/' + encodeURIComponent(f.name) + (f.public_token ? '?pt=' + encodeURIComponent(f.public_token) : '');
+    const streamUrl = f.user_uuid && f.raw_path
+        ? '/stream/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+        : '/stream/' + encodeURIComponent(f.name) + (f.public_token ? '?pt=' + encodeURIComponent(f.public_token) : '');
+    const baseName = f.name.split('/').pop();
+    const navBtns = '<div style="text-align:center;margin-top:12px;">' +
+        '<button class="btn" onclick="advanceUserPubPreview(-1,' + idx + ')">&#8592; Prev</button> ' +
+        '<button class="btn" onclick="advanceUserPubPreview(1,' + idx + ')">Next &#8594;</button></div>';
+    document.getElementById('viewTitle').textContent = baseName;
+    if (f.type === 'image') {
+        document.getElementById('viewBody').innerHTML =
+            '<div style="text-align:center;padding:8px;">' +
+            '<img src="' + thumbUrl + '" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;" alt="' + escapeHtml(baseName) + '">' +
+            '</div>' + navBtns;
+        document.getElementById('viewModal').style.display = 'block';
+        return;
+    }
+    if (f.type === 'video' || f.type === 'audio') {
+        const tag = f.type === 'audio' ? 'audio' : 'video';
+        const style = f.type === 'audio' ? 'width:100%;margin:20px 0;' : 'width:100%;max-height:70vh;background:#000;border-radius:4px;';
+        document.getElementById('viewBody').innerHTML =
+            '<' + tag + ' controls autoplay playsinline style="' + style + '">' +
+            '<source src="' + streamUrl + '">' +
+            '</' + tag + '>' + navBtns;
+        document.getElementById('viewModal').style.display = 'block';
+        return;
+    }
+    document.getElementById('viewBody').innerHTML = '<div style="color:#999;padding:24px;">Preview not available for this file type.</div>' + navBtns;
+    document.getElementById('viewModal').style.display = 'block';
+}
+
+function advanceUserPubPreview(dir, currentIdx) {
+    const previewable = ['image', 'video', 'audio'];
+    let next = currentIdx + dir;
+    while (next >= 0 && next < _userPubFiles.length) {
+        if (previewable.includes(_userPubFiles[next].type)) break;
+        next += dir;
+    }
+    if (next < 0 || next >= _userPubFiles.length) return;
+    const safeId = 'snd-userpub-' + next;
+    viewUserPublicFile(safeId, next);
+}
+
+function copyLinkUserPub(url) {
+    navigator.clipboard.writeText(url).then(() => showToast(_t('toast_copied','Link copied!'),'success')).catch(() => showToast(_t('toast_error_copy','Failed to copy'),'error'));
+}
+
+function downloadAsZipUserPub(url) {
+    const filename = url.split('/').pop().split('?')[0] || 'file';
+    showToast('Preparing ZIP\u2026','success');
+    fetch('/zip-multiple', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ files: [url] }) })
+        .then(r => r.blob()).then(blob => {
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename + '.zip'; a.click();
+            showToast('Downloaded as ZIP','success');
+        }).catch(() => showToast('Failed to download','error'));
 }

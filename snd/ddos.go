@@ -2,6 +2,7 @@ package snd
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -74,6 +75,7 @@ func LoadDDoSConfig() {
 		saveDDoSConfig()
 	}
 	loadDDoSBans()
+	loadAllowList()
 }
 
 func saveDDoSConfig() {
@@ -130,7 +132,13 @@ func DDoSMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 
 		ip := GetClientIP(r)
 
-		// Whitelist check
+		// Allowlist check (trusted IPs bypass all rate-limiting)
+		if IsAllowlisted(ip) {
+			handler(w, r)
+			return
+		}
+
+		// Legacy whitelist check (from ddos.yml)
 		for _, wip := range whitelist {
 			if ip == wip {
 				handler(w, r)
@@ -186,6 +194,9 @@ func DDoSMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 			}
 			DDoSBansMu.Unlock()
 			go saveDDoSBans()
+
+			// Record security event
+			go AppendSecurityEvent(ip, SecEvtDDoSBan, fmt.Sprintf("Rate limit exceeded: %d req in window, banned %d min", count, banMin), "")
 
 			// Record anomaly
 			RecordTrafficAnomaly()
@@ -381,5 +392,206 @@ func HandleDDoSManualBan(w http.ResponseWriter, r *http.Request) {
 	DDoSBansMu.Unlock()
 	go saveDDoSBans()
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// ─── Security Event Log ───────────────────────────────────────────────────────
+
+// SecurityEventType enumerates the kinds of security events we record.
+type SecurityEventType string
+
+const (
+	SecEvtLoginFail  SecurityEventType = "login_fail"
+	SecEvtLoginBan   SecurityEventType = "login_ban"
+	SecEvtDDoSBlock  SecurityEventType = "ddos_block"
+	SecEvtDDoSBan    SecurityEventType = "ddos_ban"
+	SecEvtArchiveBomb SecurityEventType = "archive_bomb"
+)
+
+// SecurityEvent is one entry in the security log ring buffer.
+type SecurityEvent struct {
+	Time      time.Time         `json:"time"`
+	IP        string            `json:"ip"`
+	EventType SecurityEventType `json:"event_type"`
+	Reason    string            `json:"reason"`
+	Username  string            `json:"username,omitempty"`
+}
+
+const maxSecurityEvents = 500
+
+var (
+	securityLog   []*SecurityEvent
+	securityLogMu sync.Mutex
+)
+
+// AppendSecurityEvent records a new security event (thread-safe, ring buffer).
+func AppendSecurityEvent(ip string, evtType SecurityEventType, reason string, username string) {
+	evt := &SecurityEvent{
+		Time:      time.Now(),
+		IP:        ip,
+		EventType: evtType,
+		Reason:    reason,
+		Username:  username,
+	}
+	securityLogMu.Lock()
+	securityLog = append(securityLog, evt)
+	if len(securityLog) > maxSecurityEvents {
+		securityLog = securityLog[len(securityLog)-maxSecurityEvents:]
+	}
+	securityLogMu.Unlock()
+	log.Printf("[SECURITY] %s ip=%s reason=%s user=%s", evtType, ip, reason, username)
+}
+
+// HandleSecurityLogs — GET /admin/security-logs
+// Returns the security event ring buffer (newest first).
+func HandleSecurityLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	securityLogMu.Lock()
+	// copy in reverse (newest first)
+	out := make([]*SecurityEvent, len(securityLog))
+	for i, e := range securityLog {
+		out[len(securityLog)-1-i] = e
+	}
+	securityLogMu.Unlock()
+	json.NewEncoder(w).Encode(out)
+}
+
+// ─── Allowlist (Trusted IPs) ──────────────────────────────────────────────────
+
+// AllowEntry is one trusted IP or CIDR with an optional label.
+type AllowEntry struct {
+	ID        string    `json:"id"`
+	IP        string    `json:"ip"`    // IP, CIDR, or prefix like "192.168."
+	Label     string    `json:"label"` // human-friendly note
+	CreatedAt time.Time `json:"created_at"`
+}
+
+var (
+	allowList   []*AllowEntry
+	allowListMu sync.RWMutex
+	allowListFile = "allowlist.yml"
+)
+
+func loadAllowList() {
+	data, err := os.ReadFile(allowListFile)
+	if err != nil {
+		return
+	}
+	var list []*AllowEntry
+	if err := yaml.Unmarshal(data, &list); err == nil {
+		allowListMu.Lock()
+		allowList = list
+		allowListMu.Unlock()
+	}
+}
+
+func saveAllowList() {
+	allowListMu.RLock()
+	data, _ := yaml.Marshal(allowList)
+	allowListMu.RUnlock()
+	os.WriteFile(allowListFile, data, 0644)
+}
+
+// IsAllowlisted returns true if ip matches any AllowEntry.
+// The DDoS middleware calls this before rate-limiting.
+func IsAllowlisted(ip string) bool {
+	allowListMu.RLock()
+	defer allowListMu.RUnlock()
+	for _, e := range allowList {
+		pat := e.IP
+		if pat == "" {
+			continue
+		}
+		// Exact match
+		if ip == pat {
+			return true
+		}
+		// Prefix match (e.g. "192.168.")
+		if len(pat) < len(ip) && ip[:len(pat)] == pat {
+			return true
+		}
+	}
+	return false
+}
+
+// HandleListAllowlist — GET /admin/allowlist
+func HandleListAllowlist(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	allowListMu.RLock()
+	out := make([]*AllowEntry, len(allowList))
+	copy(out, allowList)
+	allowListMu.RUnlock()
+	json.NewEncoder(w).Encode(out)
+}
+
+// HandleAddAllowlist — POST /admin/allowlist/add  body: {ip, label}
+func HandleAddAllowlist(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		IP    string `json:"ip"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IP == "" {
+		http.Error(w, `{"error":"ip required"}`, http.StatusBadRequest)
+		return
+	}
+	entry := &AllowEntry{
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		IP:        req.IP,
+		Label:     req.Label,
+		CreatedAt: time.Now(),
+	}
+	allowListMu.Lock()
+	allowList = append(allowList, entry)
+	allowListMu.Unlock()
+	go saveAllowList()
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "entry": entry})
+}
+
+// HandleUpdateAllowlist — POST /admin/allowlist/update  body: {id, ip, label}
+func HandleUpdateAllowlist(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		ID    string `json:"id"`
+		IP    string `json:"ip"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+		return
+	}
+	allowListMu.Lock()
+	for _, e := range allowList {
+		if e.ID == req.ID {
+			e.IP = req.IP
+			e.Label = req.Label
+			break
+		}
+	}
+	allowListMu.Unlock()
+	go saveAllowList()
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// HandleDeleteAllowlist — POST /admin/allowlist/delete  body: {id}
+func HandleDeleteAllowlist(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+		return
+	}
+	allowListMu.Lock()
+	filtered := allowList[:0]
+	for _, e := range allowList {
+		if e.ID != req.ID {
+			filtered = append(filtered, e)
+		}
+	}
+	allowList = filtered
+	allowListMu.Unlock()
+	go saveAllowList()
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }

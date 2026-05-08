@@ -133,8 +133,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         <div class="bulk-actions" id="bulkActions">
             <span id="selectedCount" style="font-size:14px;color:#666;">0 selected</span>
-            <button class="btn-small" onclick="downloadSelectedAsZip()">Download as ZIP</button>
-            <button class="btn-small" onclick="deselectAll()">Deselect All</button>
+            <button class="btn-small" onclick="downloadSelectedAsZip()" data-i18n="bulk_download_zip">Download as ZIP</button>
+            <button class="btn-small" onclick="deleteSelectedFiles()" style="background:#c62828;color:#fff;" data-i18n="bulk_delete">Delete Selected</button>
+            <button class="btn-small" onclick="deselectAll()" data-i18n="bulk_deselect">Deselect All</button>
         </div>
 
         <div class="files-section" id="filesSection">
@@ -218,23 +219,73 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     </div>
 
     <!-- Download URL Modal -->
- <div class="modal" id="downloadURLModal">
-        <div class="modal-content" style="max-width:520px;">
+    <div class="modal" id="downloadURLModal">
+        <div class="modal-content" id="dlModalContent" style="max-width:560px;transition:max-width 0.25s ease;">
             <div class="modal-header">
-                <h3>Download from URL</h3>
+                <h3 id="dlModalTitle">Download from URL</h3>
                 <button class="close-btn" onclick="closeModal('downloadURLModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <div style="font-size:13px;color:#666;margin-bottom:12px;" data-i18n="download_url_desc">Server will fetch the file from this URL and save it to the current folder.</div>
-                <label style="display:block;font-size:13px;color:#555;margin-bottom:4px;">URL</label>
-                <div style="display:flex;gap:8px;">
-                    <input type="url" id="dlUrlInput" placeholder="https://example.com/file.zip"
+                <!-- URL input row -->
+                <div style="display:flex;gap:8px;margin-bottom:10px;">
+                    <input type="url" id="dlUrlInput" placeholder="https://youtube.com/watch?v=... or any URL"
                            style="flex:1;padding:10px;border:1px solid #e0e0e0;font-size:13px;border-radius:4px;box-sizing:border-box;"
-                           onkeydown="if(event.key==='Enter')confirmDownloadURL()">
-                    <button class="btn-small" id="dlUrlBtn" onclick="confirmDownloadURL()" data-i18n="modal_download" style="white-space:nowrap;">Download</button>
+                           oninput="_dlOnUrlChange(this.value)"
+                           onkeydown="if(event.key==='Enter')_dlHandleEnter()">
+                    <button class="btn-small" id="dlUrlBtn" onclick="_dlHandleEnter()" style="white-space:nowrap;min-width:90px;">Fetch Info</button>
                 </div>
-                <div id="dlUrlQueue" style="display:none;margin-top:14px;border-top:1px solid #f0f0f0;padding-top:4px;max-height:240px;overflow-y:auto;"></div>
-                <style>@keyframes _dlPulse{0%,100%{opacity:1;width:30%}50%{opacity:.6;width:60%}}</style>
+
+                <!-- Streaming platform detected panel -->
+                <div id="dlStreamPanel" style="display:none;">
+                    <!-- Video preview -->
+                    <div id="dlVideoPreview" style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;padding:10px;background:#f8f9fa;border-radius:6px;border:1px solid #e8e8e8;">
+                        <img id="dlThumb" src="" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#ddd;">
+                        <div style="flex:1;min-width:0;">
+                            <div id="dlVideoTitle" style="font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"></div>
+                            <div id="dlVideoMeta" style="font-size:12px;color:#888;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Format tabs -->
+                    <div style="display:flex;gap:0;border-bottom:2px solid #e0e0e0;margin-bottom:12px;">
+                        <button id="dlTabVideo" class="dl-tab dl-tab-active" onclick="_dlSwitchTab('video')">Video</button>
+                        <button id="dlTabAudio" class="dl-tab" onclick="_dlSwitchTab('audio')">Audio Only</button>
+                        <button id="dlTabDirect" class="dl-tab" onclick="_dlSwitchTab('direct')">Direct</button>
+                    </div>
+
+                    <!-- Video tab -->
+                    <div id="dlPanelVideo">
+                        <label style="font-size:12px;color:#555;display:block;margin-bottom:4px;">Quality</label>
+                        <select id="dlVideoSelect" style="width:100%;padding:8px;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;margin-bottom:10px;"></select>
+                    </div>
+                    <!-- Audio tab -->
+                    <div id="dlPanelAudio" style="display:none;">
+                        <label style="font-size:12px;color:#555;display:block;margin-bottom:4px;">Format</label>
+                        <select id="dlAudioSelect" style="width:100%;padding:8px;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;margin-bottom:10px;"></select>
+                    </div>
+                    <!-- Direct tab -->
+                    <div id="dlPanelDirect" style="display:none;">
+                        <p style="font-size:12px;color:#666;margin:0 0 10px;">Download using the direct HTTP fetch (no yt-dlp). Works for plain file URLs.</p>
+                    </div>
+
+                    <button class="btn-small" id="dlStreamBtn" onclick="_dlStreamDownload()" style="width:100%;padding:10px;font-size:13px;">⬇ Download</button>
+                </div>
+
+                <!-- Regular URL panel (shown for non-streaming URLs) -->
+                <div id="dlDirectDesc" style="font-size:13px;color:#666;margin-bottom:8px;" data-i18n="download_url_desc">Server will fetch the file from this URL and save it to the current folder.</div>
+
+                <!-- Queue -->
+                <div id="dlUrlQueue" style="display:none;margin-top:14px;border-top:1px solid #f0f0f0;padding-top:4px;max-height:200px;overflow-y:auto;"></div>
+
+                <style>
+                    @keyframes _dlPulse{0%,100%{opacity:1;width:30%}50%{opacity:.6;width:60%}}
+                    .dl-tab{background:none;border:none;padding:8px 14px;font-size:13px;color:#666;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s;}
+                    .dl-tab:hover{color:#333;}
+                    .dl-tab-active{color:#1a73e8;border-bottom-color:#1a73e8;font-weight:600;}
+                    #dlStreamPanel{animation:_dlFadeIn .2s ease;}
+                    @keyframes _dlFadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+                    #dlUrlBtn.loading{opacity:.6;pointer-events:none;}
+                </style>
             </div>
             <div class="modal-footer">
                 <button class="btn-small" onclick="closeModal('downloadURLModal')" data-i18n="modal_close">Close</button>
@@ -248,6 +299,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <script src="/lib/context-menu.js" defer></script>
     <script src="/lib/upload.js" defer></script>
     <script src="/lib/userdash.js" defer></script>
+    <script src="/lib/qr.js" defer></script>
     <script>
         const USER_UUID  = '` + user.UUID + `';
         const USER_TOKEN = '` + user.APIToken + `';
@@ -271,6 +323,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             fetch('/user/settings').then(r => r.json()).then(data => {
                 const s = data.settings || data;
                 _showDirectLinks = s.show_direct_links !== false;
+                window._qrEnabled  = !!data.allow_qr;
+                window._qrLogoURL  = data.qr_logo_url || '';
                 loadFiles();
                 if (s.bg_music_url) applyUserBgMusic(s.bg_music_url);
             }).catch(() => { _showDirectLinks = true; loadFiles(); });
