@@ -2919,12 +2919,15 @@ func HandleStreamDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args := []string{
-		"--no-playlist",
-		"-o", filepath.Join(saveDir, "%(title)s.%(ext)s"),
-	}
-	if req.FormatID != "" {
-		args = append(args, "-f", req.FormatID)
-	}
+    "--no-playlist",
+    "--merge-output-format", "mp4",
+    "-o", filepath.Join(saveDir, "%(title)s.%(ext)s"),
+}
+if req.FormatID != "" {
+    args = append(args, "-f", req.FormatID+"+bestaudio/"+req.FormatID)
+    } else {
+    args = append(args, "-f", "bestvideo+bestaudio/best")
+    }
 	args = append(args, req.URL)
 
 	ctx := r.Context()
