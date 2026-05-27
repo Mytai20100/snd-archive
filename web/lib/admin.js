@@ -706,6 +706,54 @@ async function loadAdminSettings() {
         if (el) el.checked = s.embed_loader_enabled !== false; // default true
         applyBgMusic(s.bg_music_url);
     } catch {}
+
+    // Load MCP settings separately
+    try {
+        const mres = await fetch('/admin/mcp/settings');
+        const m = await mres.json();
+        const adm = m.admin_mcp || {};
+        const userPerms = m.user_mcp_default_perms || {};
+
+        const adminEnabled = document.getElementById('mcp-admin-enabled');
+        if (adminEnabled) {
+            adminEnabled.checked = !!adm.enabled;
+            document.getElementById('mcp-admin-details').style.display = adm.enabled ? '' : 'none';
+            adminEnabled.onchange = function() {
+                document.getElementById('mcp-admin-details').style.display = this.checked ? '' : 'none';
+            };
+        }
+        const rl = document.getElementById('mcp-admin-ratelimit');
+        if (rl) rl.value = adm.rate_limit || 60;
+
+        const p = adm.permissions || {};
+        _setMcpCheck('mcp-admin-perm-read',    p.can_read);
+        _setMcpCheck('mcp-admin-perm-upload',  p.can_upload);
+        _setMcpCheck('mcp-admin-perm-create',  p.can_create);
+        _setMcpCheck('mcp-admin-perm-rename',  p.can_rename);
+        _setMcpCheck('mcp-admin-perm-delete',  p.can_delete);
+        _setMcpCheck('mcp-admin-perm-storage', p.can_storage);
+        _setMcpCheck('mcp-admin-perm-users',   p.can_users);
+
+        const allowUser = document.getElementById('mcp-allow-user');
+        if (allowUser) {
+            allowUser.checked = !!m.allow_user_mcp;
+            document.getElementById('mcp-user-details').style.display = m.allow_user_mcp ? '' : 'none';
+            allowUser.onchange = function() {
+                document.getElementById('mcp-user-details').style.display = this.checked ? '' : 'none';
+            };
+        }
+        _setMcpCheck('mcp-user-perm-read',    userPerms.can_read);
+        _setMcpCheck('mcp-user-perm-upload',  userPerms.can_upload);
+        _setMcpCheck('mcp-user-perm-create',  userPerms.can_create);
+        _setMcpCheck('mcp-user-perm-rename',  userPerms.can_rename);
+        _setMcpCheck('mcp-user-perm-delete',  userPerms.can_delete);
+        _setMcpCheck('mcp-user-perm-storage', userPerms.can_storage);
+    } catch(e) { console.warn('MCP settings load failed', e); }
+}
+
+function _setMcpCheck(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!val;
 }
 
 async function saveAdminSettings() {
@@ -732,9 +780,43 @@ async function saveAdminSettings() {
         let styleTag = document.getElementById('_adminCustomCSS');
         if (!styleTag) { styleTag = document.createElement('style'); styleTag.id = '_adminCustomCSS'; document.head.appendChild(styleTag); }
         styleTag.textContent = s.custom_css || '';
-        showSaveSuccessPopup(_t('toast_settings_saved', 'Settings saved successfully'));
     } else {
         showSaveErrorPopup(_t('toast_error_settings', 'Failed to save settings'));
+        return;
+    }
+
+    // Save MCP settings separately
+    const _gc = id => { const el = document.getElementById(id); return el ? el.checked : false; };
+    const mcpPayload = {
+        admin_mcp: {
+            enabled:    _gc('mcp-admin-enabled'),
+            rate_limit: parseInt((document.getElementById('mcp-admin-ratelimit')||{value:'60'}).value) || 60,
+            permissions: {
+                can_read:    _gc('mcp-admin-perm-read'),
+                can_upload:  _gc('mcp-admin-perm-upload'),
+                can_create:  _gc('mcp-admin-perm-create'),
+                can_rename:  _gc('mcp-admin-perm-rename'),
+                can_delete:  _gc('mcp-admin-perm-delete'),
+                can_storage: _gc('mcp-admin-perm-storage'),
+                can_users:   _gc('mcp-admin-perm-users'),
+            }
+        },
+        allow_user_mcp: _gc('mcp-allow-user'),
+        user_mcp_default_perms: {
+            can_read:    _gc('mcp-user-perm-read'),
+            can_upload:  _gc('mcp-user-perm-upload'),
+            can_create:  _gc('mcp-user-perm-create'),
+            can_rename:  _gc('mcp-user-perm-rename'),
+            can_delete:  _gc('mcp-user-perm-delete'),
+            can_storage: _gc('mcp-user-perm-storage'),
+            can_users:   false // always blocked for users
+        }
+    };
+    const mres = await fetch('/admin/mcp/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(mcpPayload) });
+    if (mres.ok) {
+        showSaveSuccessPopup(_t('toast_settings_saved', 'Settings saved successfully'));
+    } else {
+        showSaveErrorPopup('Settings saved but MCP settings failed to save');
     }
 }
 
@@ -872,17 +954,73 @@ async function loadUserSettings() {
             qrRow.style.display = data.allow_qr ? '' : 'none';
             qrChk.checked = !!s.enable_qr;
         }
+        // MCP section — only shown when admin allows user MCP
+        const mcpSec = document.getElementById('us-mcp-section');
+        if (mcpSec) {
+            mcpSec.style.display = data.allow_mcp ? '' : 'none';
+            if (data.allow_mcp) {
+                const mcp = s.mcp || {};
+                const mcpEnabled = document.getElementById('us-mcp-enabled');
+                const mcpPerms   = document.getElementById('us-mcp-perms');
+                if (mcpEnabled) {
+                    mcpEnabled.checked = !!mcp.enabled;
+                    if (mcpPerms) mcpPerms.style.display = mcp.enabled ? '' : 'none';
+                    mcpEnabled.onchange = function() {
+                        if (mcpPerms) mcpPerms.style.display = this.checked ? '' : 'none';
+                    };
+                }
+                const mp = mcp.permissions || {};
+                const maxP = data.mcp_max_perms || {};
+                // Show/grey-out permissions based on max allowed by admin
+                _loadMcpPermRow('us-mcp-perm-read',    mp.can_read,    maxP.can_read);
+                _loadMcpPermRow('us-mcp-perm-upload',  mp.can_upload,  maxP.can_upload);
+                _loadMcpPermRow('us-mcp-perm-create',  mp.can_create,  maxP.can_create);
+                _loadMcpPermRow('us-mcp-perm-rename',  mp.can_rename,  maxP.can_rename);
+                _loadMcpPermRow('us-mcp-perm-delete',  mp.can_delete,  maxP.can_delete);
+                _loadMcpPermRow('us-mcp-perm-storage', mp.can_storage, maxP.can_storage);
+            }
+        }
         if (s.bg_music_url) applyBgMusic(s.bg_music_url);
     } catch(e) { console.error('loadUserSettings:', e); }
 }
 
+function _loadMcpPermRow(id, val, adminMax) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.checked = !!val;
+    // Disable if admin hasn't allowed this permission globally
+    if (!adminMax) {
+        el.disabled = true;
+        el.parentElement.style.opacity = '0.4';
+        el.parentElement.title = 'Not allowed by admin';
+    } else {
+        el.disabled = false;
+        el.parentElement.style.opacity = '';
+        el.parentElement.title = '';
+    }
+}
+
 async function saveUserSettings() {
+    const _gc = id => { const el = document.getElementById(id); return el && !el.disabled ? el.checked : false; };
     const s = {
         background_url: document.getElementById('us-bg').value,
         bg_music_url: document.getElementById('us-music').value,
         language: document.getElementById('us-lang').value,
         show_direct_links: document.getElementById('us-direct-links').checked,
-        enable_qr: !!(document.getElementById('us-enable-qr') || {}).checked
+        enable_qr: _gc('us-enable-qr'),
+        mcp: {
+            enabled: _gc('us-mcp-enabled'),
+            rate_limit: 30,
+            permissions: {
+                can_read:    _gc('us-mcp-perm-read'),
+                can_upload:  _gc('us-mcp-perm-upload'),
+                can_create:  _gc('us-mcp-perm-create'),
+                can_rename:  _gc('us-mcp-perm-rename'),
+                can_delete:  _gc('us-mcp-perm-delete'),
+                can_storage: _gc('us-mcp-perm-storage'),
+                can_users:   false
+            }
+        }
     };
     const res = await fetch('/user/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
     if (res.ok) { showToast(_t('toast_settings_saved','Settings saved')); applyBgMusic(s.bg_music_url); }

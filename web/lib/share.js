@@ -137,10 +137,10 @@ function renderFiles(files) {
         const thumbHtml = (f.type === 'image' || f.type === 'video')
             ? '<div onclick="openPreviewByIdx(' + idx + ')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
               '<img src="' + buildThumbnailUrl(f) + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;"' +
-              ' onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + f.type + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
+              ' onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + (f.icon || f.type) + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
               '</div>'
             : '<div onclick="openPreviewByIdx(' + idx + ')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
-              '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+              '<img src="/icons/' + (f.icon || f.type) + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
               '</div>';
 
         return '<div class="file-item">' +

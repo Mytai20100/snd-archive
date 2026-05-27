@@ -84,21 +84,48 @@ document.addEventListener('touchstart', e => {
 // Touchend delegation for dynamically injected menu buttons (mobile fix).
 // Buttons are injected via innerHTML so we attach on body.
 document.body.addEventListener('touchend', e => {
+    // ── Case 1: ⋮ button tap ─────────────────────────────────────────────
     const btn = e.target.closest && e.target.closest('.menu-btn');
-    if (!btn) return;
+    if (btn) {
+        const onclickAttr = btn.getAttribute('onclick');
+        if (onclickAttr) {
+            e.stopPropagation();
+            e.preventDefault(); // suppress the 300 ms synthesised click
+            const synth = {
+                stopPropagation: () => {},
+                preventDefault:  () => {},
+                currentTarget: btn,
+                target: btn,
+                cancelable: false
+            };
+            // eslint-disable-next-line no-new-func
+            (new Function('event', onclickAttr))(synth);
+        }
+        return;
+    }
 
-    const onclickAttr = btn.getAttribute('onclick');
-    if (onclickAttr) {
-        e.stopPropagation();
-        e.preventDefault(); // suppress the 300 ms synthesised click
-        const synth = {
-            stopPropagation: () => {},
-            preventDefault:  () => {},
-            currentTarget: btn,
-            target: btn,
-            cancelable: false
-        };
-        // eslint-disable-next-line no-new-func
-        (new Function('event', onclickAttr))(synth);
+    // ── Case 2: context-menu item tap ────────────────────────────────────
+    // On iOS the synthesised click fires reliably after touchend on static
+    // elements, but for *dynamically-injected* elements inside an absolutely-
+    // positioned container the click sometimes never arrives.  We fire the
+    // onclick handler ourselves on touchend so the action always triggers.
+    const item = e.target.closest && e.target.closest('.context-menu-item');
+    if (item) {
+        // Close menus immediately so the UI feels snappy
+        _closeAllMenus();
+        // If the item contains an <a> (e.g. Download), activate it
+        const anchor = item.querySelector('a');
+        if (anchor) {
+            e.preventDefault();
+            anchor.click();
+            return;
+        }
+        const onclickAttr = item.getAttribute('onclick');
+        if (onclickAttr) {
+            e.preventDefault();
+            // eslint-disable-next-line no-new-func
+            (new Function('event', onclickAttr))({ target: item, currentTarget: item, stopPropagation: ()=>{}, preventDefault: ()=>{} });
+        }
+        return;
     }
 }, { passive: false });

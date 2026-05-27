@@ -40,7 +40,7 @@ function showPreview(filename, type) {
             '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
             '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button>' +
             '</div>';
-        document.getElementById('viewModal').style.display = 'block';
+        openModal('viewModal');
         return;
     }
 
@@ -53,7 +53,7 @@ function showPreview(filename, type) {
                 '<div style="text-align:center;margin-top:12px;">' +
                 '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
                 '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
-            document.getElementById('viewModal').style.display = 'block';
+            openModal('viewModal');
             const v = document.getElementById('hlsPlayer');
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                 const h = new Hls(); h.loadSource(streamUrl); h.attachMedia(v); v.play().catch(() => {});
@@ -79,7 +79,7 @@ function showPreview(filename, type) {
                     '<div style="text-align:center;margin-top:12px;">' +
                     '<button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> ' +
                     '<button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
-                document.getElementById('viewModal').style.display = 'block';
+                openModal('viewModal');
             }
         }
         return;
@@ -324,11 +324,11 @@ function loadFiles() {
                 if (f.type === 'image' || f.type === 'video') {
                     const thumbSrc = '/thumbnail/' + encodeURIComponent(fullFileName);
                     html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
-                        '<img src="' + thumbSrc + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + f.type + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
+                        '<img src="' + thumbSrc + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + (f.icon || f.type) + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
                         '</div>';
                 } else {
                     html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f5f5f5;display:flex;align-items:center;justify-content:center;">' +
-                        '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                        '<img src="/icons/' + (f.icon || f.type) + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
                         '</div>';
                 }
 
@@ -359,6 +359,19 @@ function loadFiles() {
                     html += '<div class="context-menu-item" onclick="editFile(\'' + esc + '\')">'+_t('ctx_edit','Edit')+'</div>';
                 }
                 html += '<div class="context-menu-item" onclick="copyLink(\'' + esc + '\',' + isPublic + ')">'+_t('ctx_copy_link','Copy link')+'</div>';
+                // Direct download via /download/ which sets Content-Disposition:attachment.
+                // Public files use ?pt= token so guests can download without an API token.
+                (function(){
+                    var dlUrl;
+                    if (isPublic && f.public_token) {
+                        dlUrl = '/download/' + encodeURIComponent(fullFileName) + '?pt=' + encodeURIComponent(f.public_token);
+                    } else if (isPublic) {
+                        dlUrl = '/download/' + encodeURIComponent(fullFileName);
+                    } else {
+                        dlUrl = addTokenToURL('/download/' + encodeURIComponent(fullFileName));
+                    }
+                    html += '<div class="context-menu-item"><a href="' + dlUrl.replace(/"/g,'&quot;') + '" style="color:inherit;text-decoration:none;">'+_t('ctx_download','Download')+'</a></div>';
+                })();
                 html += '<div class="context-menu-item" onclick="downloadAsZip(\'' + esc + '\')">'+_t('ctx_download_zip','Download as ZIP')+'</div>';
                 if (isAuthenticated) {
                     if (f.type === 'archive') html += '<div class="context-menu-item" onclick="extractArchive(\'' + esc + '\')">'+_t('ctx_extract','Extract here')+'</div>';
@@ -431,7 +444,7 @@ setPreviewFilesUserPub(userFiles);
                         '</div>';
                 } else {
                     thumbHtml = '<div style="width:72px;height:72px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
-                        '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                        '<img src="/icons/' + (f.icon || f.type) + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
                         '</div>';
                 }
 
@@ -450,7 +463,9 @@ setPreviewFilesUserPub(userFiles);
                 html += '<div class="context-menu" id="menu-' + safeUserFileId + '">';
                 html += '<div class="context-menu-item" onclick="viewUserPublicFile(\'' + safeUserFileId + '\',' + escIdx + ')">View</div>';
                 html += '<div class="context-menu-item" onclick="copyLinkUserPub(\'' + rawUrl.replace(/'/g, "\\'") + '\')">Copy Link</div>';
-                html += '<div class="context-menu-item" onclick="downloadAsZipUserPub(\'' + rawUrl.replace(/'/g, "\\'") + '\')">Download as ZIP</div>';
+                html += '<div class="context-menu-item"><a href="' + downloadUrl.replace(/"/g, '&quot;') + '" download style="color:inherit;text-decoration:none;">Download</a></div>';
+                html += '<div class="context-menu-item" onclick="_dlZipUserPub(' + idx + ')">Download as ZIP</div>';
+                if (window._qrEnabled) html += '<div class="context-menu-item" onclick="_qrUserPub(' + idx + ')">Generate QR</div>';
                 html += '</div></div>';
                 html += '</div>';
             });
@@ -499,7 +514,7 @@ function viewFile(filename, type) {
     }
     const viewBody = document.getElementById('viewBody');
     document.getElementById('viewTitle').textContent = baseName;
-    document.getElementById('viewModal').style.display = 'block';
+    openModal('viewModal');
 
     if (type === 'image') {
         viewBody.innerHTML = '<div class="media-viewer" id="imageViewer"><div class="media-viewer-inner" id="imageInner"><img src="' + rawUrl + '" id="zoomableImage"></div><div class="zoom-hint" id="zoomHint">Click to zoom in</div></div>';
@@ -559,7 +574,7 @@ function editFile(filename) {
     currentEditFile = filename;
     document.getElementById('editTitle').textContent = 'Edit: ' + filename.split('/').pop();
     document.getElementById('editContent').value = 'Loading...';
-    document.getElementById('editModal').style.display = 'block';
+    openModal('editModal');
     fetch(addTokenToURL('/raw/' + encodeURIComponent(filename)))
         .then(r => r.text()).then(c => { document.getElementById('editContent').value = c; })
         .catch(() => { document.getElementById('editContent').value = '// Failed to load file'; });
@@ -572,10 +587,18 @@ function saveFile() {
       .catch(() => showToast(_t('toast_error_save','Failed to save'), 'error'));
 }
 function downloadAsZip(filename) {
+    const displayName = filename.split('/').pop() || 'file';
+    showToast('Preparing ZIP\u2026', 'success');
     fetch('/zip-multiple', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: [filename] }) })
-        .then(r => r.blob()).then(blob => {
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename + '.zip'; a.click();
-        });
+        .then(r => {
+            if (!r.ok) throw new Error('Server error ' + r.status);
+            return r.blob();
+        })
+        .then(blob => {
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = displayName + '.zip'; a.click();
+            showToast('Downloaded as ZIP', 'success');
+        })
+        .catch(() => showToast(_t ? _t('toast_error_zip','Failed to create ZIP') : 'Failed to create ZIP', 'error'));
 }
 function deleteFile(filename) {
     if (!isAuthenticated) { showToast(_t('toast_login_required','Login required'), 'error'); return; }
@@ -593,14 +616,14 @@ function deleteFile(filename) {
 function renameFile(filename) {
     currentRenameFile = filename;
     document.getElementById('renameInput').value = filename;
-    document.getElementById('renameModal').style.display = 'block';
+    openModal('renameModal');
     document.getElementById('renameInput').select();
 }
 let currentRenameFolderPath = '';
 function renameFolderDialog(fullPath, name) {
     currentRenameFolderPath = fullPath;
     document.getElementById('renameInput').value = name;
-    document.getElementById('renameModal').style.display = 'block';
+    openModal('renameModal');
     document.getElementById('renameInput').select();
     document.getElementById('renameModal').dataset.mode = 'folder';
 }
@@ -646,7 +669,7 @@ function toggleFolderPublic(folderPath, isPublic) {
 function showFolderProperties(folderPath) {
     document.getElementById('propsTitle').textContent = folderPath.split('/').pop() + '/';
     document.getElementById('propsBody').innerHTML = '<div style="color:#999;padding:24px;text-align:center;">Loading...</div>';
-    document.getElementById('propsModal').style.display = 'block';
+    openModal('propsModal');
     fetch('/folder-info/' + encodeURIComponent(folderPath)).then(r => r.json()).then(d => {
         document.getElementById('propsBody').innerHTML =
             '<table class="props-table">' +
@@ -673,7 +696,7 @@ function deleteFolder(folderName) {
 }
 function openCreateFolderModal() {
     document.getElementById('folderNameInput').value = '';
-    document.getElementById('createFolderModal').style.display = 'block';
+    openModal('createFolderModal');
     document.getElementById('folderNameInput').focus();
 }
 function confirmCreateFolder() {
@@ -1046,7 +1069,7 @@ function viewUserPublicFile(safeId, idx) {
             '<div style="text-align:center;padding:8px;">' +
             '<img src="' + thumbUrl + '" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;" alt="' + escapeHtml(baseName) + '">' +
             '</div>' + navBtns;
-        document.getElementById('viewModal').style.display = 'block';
+        openModal('viewModal');
         return;
     }
     if (f.type === 'video' || f.type === 'audio') {
@@ -1056,11 +1079,11 @@ function viewUserPublicFile(safeId, idx) {
             '<' + tag + ' controls autoplay playsinline style="' + style + '">' +
             '<source src="' + streamUrl + '">' +
             '</' + tag + '>' + navBtns;
-        document.getElementById('viewModal').style.display = 'block';
+        openModal('viewModal');
         return;
     }
     document.getElementById('viewBody').innerHTML = '<div style="color:#999;padding:24px;">Preview not available for this file type.</div>' + navBtns;
-    document.getElementById('viewModal').style.display = 'block';
+    openModal('viewModal');
 }
 
 function advanceUserPubPreview(dir, currentIdx) {
@@ -1079,12 +1102,52 @@ function copyLinkUserPub(url) {
     navigator.clipboard.writeText(url).then(() => showToast(_t('toast_copied','Link copied!'),'success')).catch(() => showToast(_t('toast_error_copy','Failed to copy'),'error'));
 }
 
-function downloadAsZipUserPub(url) {
-    const filename = url.split('/').pop().split('?')[0] || 'file';
+// Generate QR for a user-public file given its full public URL.
+// No API token is embedded — the URL already contains pt= if needed.
+function generateQRUserPub(publicUrl, encodedPT) {
+    var url = publicUrl;
+    if (encodedPT && publicUrl.indexOf('pt=') === -1) {
+        url += (publicUrl.indexOf('?') === -1 ? '?' : '&') + 'pt=' + encodedPT;
+    }
+    var modal  = document.getElementById('snd-qr-modal');
+    var title  = document.getElementById('snd-qr-title');
+    var canvas = document.getElementById('snd-qr-canvas');
+    if (!modal || !canvas) return;
+    title.textContent = publicUrl.split('/').pop().split('?')[0] || 'file';
+    modal.style.display = 'flex';
+    if (typeof _renderQRServerSide === 'function') {
+        _renderQRServerSide(canvas, url);
+    }
+}
+
+// Index-based helpers — avoid quote escaping issues in html string building
+function _dlZipUserPub(idx) {
+    var f = _userPubFiles && _userPubFiles[idx];
+    if (!f) return;
+    var filename = f.raw_path || f.name || ('file' + idx);
+    downloadAsZipUserPub(filename);
+}
+
+function _qrUserPub(idx) {
+    var f = _userPubFiles && _userPubFiles[idx];
+    if (!f) return;
+    var rawUrl = f.user_uuid && f.raw_path
+        ? window.location.origin + '/raw/' + encodeURIComponent(f.raw_path) + '?u=' + encodeURIComponent(f.user_uuid) + (f.public_token ? '&pt=' + encodeURIComponent(f.public_token) : '')
+        : window.location.origin + '/raw/' + encodeURIComponent(f.name) + (f.public_token ? '?pt=' + encodeURIComponent(f.public_token) : '');
+    generateQRUserPub(rawUrl, '');
+}
+
+function downloadAsZipUserPub(relFilename) {
+    // relFilename is now the relative filename (e.g. "photo.png"), not a full URL.
+    // Passed from the updated context menu patch.
+    const displayName = relFilename.split('/').pop() || 'file';
     showToast('Preparing ZIP\u2026','success');
-    fetch('/zip-multiple', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ files: [url] }) })
-        .then(r => r.blob()).then(blob => {
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename + '.zip'; a.click();
+    fetch('/zip-multiple', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ files: [relFilename] }) })
+        .then(r => {
+            if (!r.ok) throw new Error('Server error ' + r.status);
+            return r.blob();
+        }).then(blob => {
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = displayName + '.zip'; a.click();
             showToast('Downloaded as ZIP','success');
-        }).catch(() => showToast('Failed to download','error'));
+        }).catch(() => showToast('Failed to download ZIP','error'));
 }

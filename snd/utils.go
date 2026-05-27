@@ -77,12 +77,17 @@ func UpdateStats() {
 }
 
 func GetClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		return strings.TrimSpace(ips[0])
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+	// HIGH-1 FIX: Only trust X-Forwarded-For / X-Real-IP when TrustedProxy is enabled.
+	// Without this, attackers can spoof their IP to bypass DDoS bans and brute-force protection.
+	if Cfg.TrustedProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ips := strings.Split(xff, ",")
+			// Take the LAST IP (appended by the trusted proxy), not the first (client-controlled).
+			return strings.TrimSpace(ips[len(ips)-1])
+		}
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
+		}
 	}
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {

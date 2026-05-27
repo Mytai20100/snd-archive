@@ -250,3 +250,24 @@ func IsAuthenticatedForUser(r *http.Request, uuid string) bool {
 	}
 	return session.IsAdmin || session.UserUUID == uuid
 }
+
+// RequireTokenOrChallenge wraps a handler so that:
+//   - Requests carrying a valid API token (admin or user) bypass the CF challenge —
+//     this preserves automation and direct-link use-cases.
+//   - All other requests must pass the CF challenge before reaching the handler.
+//
+// HIGH-9 FIX: Without this wrapper the CF challenge only protected / and /my,
+// so bots could directly call /download/, /view/, /stream/, etc. without
+// ever seeing the challenge page.
+func RequireTokenOrChallenge(cf func(http.HandlerFunc) http.HandlerFunc, handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token != "" && (tokenEqual(token, Cfg.APIToken) || GetUserByToken(token) != nil) {
+			// Valid token — skip the challenge entirely.
+			handler(w, r)
+			return
+		}
+		// No valid token — must pass the CF challenge first.
+		cf(handler)(w, r)
+	}
+}

@@ -36,9 +36,9 @@ var (
 
 	// AdminLoginBans tracks brute-force attempts per IP for admin login.
 	AdminLoginBans = make(map[string]*AdminLoginBan)
-	AdminLoginMu   sync.Mutex
+	AdminLoginMu   sync.RWMutex
 
 	// L2 FIX: UserLoginBans tracks brute-force attempts per "ip:username" for sub-user logins.
 	UserLoginBans = make(map[string]*AdminLoginBan)
-	UserLoginMu   sync.Mutex
+	UserLoginMu   sync.RWMutex
 )

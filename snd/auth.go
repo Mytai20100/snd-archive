@@ -392,17 +392,137 @@ func isSafeRedirectPath(p string) bool {
 	return strings.HasPrefix(p, "/")
 }
 
+// HandleCFChallenge dispatches GET (show widget) and POST (verify token).
+// HIGH-8 FIX: replaced the old unconditional-cookie fake challenge with real
+// Cloudflare Turnstile verification.  A bot that simply GETs /cf-challenge and
+// replays the Set-Cookie header will no longer receive a cf_passed cookie,
+// because the cookie is only issued after the Turnstile token is verified
+// server-side against https://challenges.cloudflare.com/turnstile/v0/siteverify.
 func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		handleCFChallengeVerify(w, r)
+	} else {
+		handleCFChallengeGET(w, r)
+	}
+}
+
+// handleCFChallengeGET renders the Turnstile challenge widget.
+// If no site key is configured, it falls back to the old spinner page so that
+// the server remains usable even without Turnstile credentials set up.
+func handleCFChallengeGET(w http.ResponseWriter, r *http.Request) {
 	returnPath := r.URL.Query().Get("return")
-	// FIX: Validate redirect path to prevent XSS and open redirect
 	if !isSafeRedirectPath(returnPath) {
 		returnPath = "/"
 	}
-	// FIX: HTML-escape for safe embedding in JS string literal
 	safeReturn := html.EscapeString(returnPath)
 
-	// H1 FIX: Set cf_passed cookie server-side so it has HttpOnly and Secure,
-	// preventing XSS from reading or forging it.
+	SiteSettingsMu.RLock()
+	siteKey := SiteSettingsData.TurnstileSiteKey
+	SiteSettingsMu.RUnlock()
+
+	var pageHTML string
+	if siteKey == "" {
+		// Fallback: Turnstile not configured — show a notice instead of silently
+		// granting access.  Admin should configure TurnstileSiteKey + TurnstileSecretKey
+		// in Settings to enable real verification.
+		pageHTML = `<!DOCTYPE html>
+<html>
+<head><title>Challenge not configured</title>
+<style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fafafa;}
+.box{text-align:center;background:white;padding:40px;border:1px solid #e0e0e0;max-width:500px;border-radius:4px;}
+p{color:#666;font-size:14px;}</style></head>
+<body><div class="box">
+<h2>Browser check unavailable</h2>
+<p>Cloudflare Turnstile is not configured on this server.<br>
+Contact the administrator to set up <strong>turnstile_site_key</strong> and <strong>turnstile_secret_key</strong> in Settings.</p>
+</div></body></html>`
+	} else {
+		pageHTML = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Checking your browser</title>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; }
+        .challenge-box { text-align: center; background: white; padding: 40px; border: 1px solid #e0e0e0; max-width: 500px; border-radius: 4px; }
+        h2 { margin-bottom: 24px; }
+        p { color: #666; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="challenge-box">
+        <h2>Checking your browser</h2>
+        <form method="POST" action="/cf-challenge" id="cf-form">
+            <div class="cf-turnstile"
+                 data-sitekey="` + html.EscapeString(siteKey) + `"
+                 data-callback="onTurnstileSuccess"></div>
+            <input type="hidden" name="return" value="` + safeReturn + `">
+        </form>
+        <p>Completing this check confirms you are a human.</p>
+    </div>
+    <script>
+        function onTurnstileSuccess(token) {
+            document.getElementById('cf-form').submit();
+        }
+    </script>
+</body>
+</html>`
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(pageHTML))
+}
+
+// handleCFChallengeVerify receives the POST from the Turnstile widget, verifies
+// the cf-turnstile-response token with Cloudflare's siteverify API, and — only
+// on success — issues the cf_passed cookie and redirects the user onward.
+func handleCFChallengeVerify(w http.ResponseWriter, r *http.Request) {
+	returnPath := r.FormValue("return")
+	if !isSafeRedirectPath(returnPath) {
+		returnPath = "/"
+	}
+
+	SiteSettingsMu.RLock()
+	siteKey    := SiteSettingsData.TurnstileSiteKey
+	secretKey  := SiteSettingsData.TurnstileSecretKey
+	SiteSettingsMu.RUnlock()
+
+	// If keys are not configured, deny — do not fall back to granting access.
+	if siteKey == "" || secretKey == "" {
+		http.Error(w, "Challenge not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	token := r.FormValue("cf-turnstile-response")
+	if token == "" {
+		// No token submitted — send back to challenge page.
+		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
+		return
+	}
+
+	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify",
+		url.Values{
+			"secret":   {secretKey},
+			"response": {token},
+			"remoteip": {GetClientIP(r)},
+		})
+	if err != nil {
+		log.Printf("[CF-CHALLENGE] siteverify request failed: %v", err)
+		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || !result.Success {
+		// Failed verification — redirect back to challenge (do NOT set cookie).
+		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
+		return
+	}
+
+	// Verified — issue the cf_passed cookie and redirect.
 	isHTTPS := r.TLS != nil
 	http.SetCookie(w, &http.Cookie{
 		Name:     "cf_passed",
@@ -413,42 +533,5 @@ func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS,
 		SameSite: http.SameSiteLaxMode,
 	})
-
-	pageHTML := `<!DOCTYPE html>
-<html>
-<head>
-    <title>Checking your browser</title>
-    <style>
-        body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; }
-        .challenge-box { text-align: center; background: white; padding: 40px; border: 1px solid #e0e0e0; max-width: 500px; border-radius: 4px; }
-        .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #1a1a1a; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 20px auto; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        p { color: #666; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="challenge-box">
-        <h2>Checking your browser</h2>
-        <div class="spinner"></div>
-        <p>This process is automatic. You will be redirected shortly.</p>
-    </div>
-    <script>
-        (function() {
-            var dest = '` + safeReturn + `';
-            // Ensure dest is a safe relative path
-            if (!dest || dest.indexOf('//') !== -1 || dest.indexOf(':') !== -1) {
-                dest = '/';
-            }
-            if (dest.charAt(0) !== '/') dest = '/' + dest;
-            // H1 FIX: Cookie is now set server-side (HttpOnly). No JS cookie here.
-            setTimeout(function() {
-                window.location.href = dest;
-            }, 3000);
-        })();
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(pageHTML))
+	http.Redirect(w, r, returnPath, http.StatusSeeOther)
 }

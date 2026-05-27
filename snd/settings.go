@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -35,18 +36,23 @@ type SiteSettings struct {
 	QRLogoURL  string `yaml:"qr_logo_url"  json:"qr_logo_url"`
 	// Share page: whether to include user public files/folders in /share listing
 	ShowUserPublicOnShare bool `yaml:"show_user_public_on_share" json:"show_user_public_on_share"`
+	// HIGH-8 FIX: Cloudflare Turnstile keys for real bot challenge.
+	// TurnstileSecretKey is never sent to the client (omitted from JSON).
+	TurnstileSiteKey   string `yaml:"turnstile_site_key"   json:"turnstile_site_key"`
+	TurnstileSecretKey string `yaml:"turnstile_secret_key" json:"-"`
+	// ── MCP Server (admin) ───────────────────────────────────────────────────
+	// AdminMCP configures the admin-level MCP server endpoint.
+	// Uses the server's own API token from config.yml — never a user token.
+	AdminMCP AdminMCPSettings `yaml:"admin_mcp" json:"admin_mcp"`
+	// AllowUserMCP controls whether sub-users can enable their own MCP server.
+	// User MCP is always isolated: it uses the user's own API token only.
+	AllowUserMCP bool `yaml:"allow_user_mcp" json:"allow_user_mcp"`
+	// UserMCPDefaultPerms are the maximum permissions a user MCP can have.
+	// Admin cannot grant users more than these limits.
+	UserMCPDefaultPerms MCPPermissions `yaml:"user_mcp_default_perms" json:"user_mcp_default_perms"`
 }
 
-// UserSettings holds per-user UI settings (stored inline in UserAccount).
-// These are stored in users.yml as part of UserAccount's extra fields.
-type UserSettings struct {
-	Theme           string `yaml:"theme"            json:"theme"`
-	BackgroundURL   string `yaml:"background_url"   json:"background_url"`
-	BgMusicURL      string `yaml:"bg_music_url"     json:"bg_music_url"`
-	Language        string `yaml:"language"         json:"language"`
-	ShowDirectLinks bool   `yaml:"show_direct_links" json:"show_direct_links"`
-	EnableQR        bool   `yaml:"enable_qr"        json:"enable_qr"`
-}
+// UserSettings is defined in types.go (includes MCP field).
 
 var (
 	SiteSettingsData SiteSettings
@@ -170,6 +176,25 @@ func LoadSiteSettings() {
 		ShowDirectLinks:      true,
 		EmbedLoaderEnabled:   true,
 		ShowUserPublicOnShare: true,
+		// Admin MCP: disabled by default, no permissions until admin enables
+		AdminMCP: AdminMCPSettings{
+			Enabled:   false,
+			RateLimit: 60,
+			Permissions: MCPPermissions{
+				CanRead: true, // read-only as safe default
+			},
+		},
+		// User MCP: disabled globally by default
+		AllowUserMCP: false,
+		UserMCPDefaultPerms: MCPPermissions{
+			CanRead:    true,
+			CanUpload:  false,
+			CanDelete:  false,
+			CanCreate:  false,
+			CanRename:  false,
+			CanStorage: true,
+			CanUsers:   false, // users can NEVER manage users via MCP
+		},
 	}
 	data, err := os.ReadFile(SiteSettingsFile)
 	if err == nil {
@@ -251,6 +276,23 @@ func HandleAdminSaveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+	// CRIT-1 FIX: Validate CustomCSS to prevent CSS injection / stored XSS.
+	// Block tags that can break out of the <style> context.
+	if strings.Contains(s.CustomCSS, "</style") || strings.Contains(s.CustomCSS, "<script") ||
+		strings.Contains(s.CustomCSS, "javascript:") {
+		http.Error(w, `{"error":"invalid css: forbidden content"}`, http.StatusBadRequest)
+		return
+	}
+	// MED-4 FIX: Validate URL fields to only allow http/https schemes.
+	for _, rawURL := range []string{s.BackgroundURL, s.BgMusicURL, s.EmbedImageURL, s.QRLogoURL} {
+		if rawURL == "" {
+			continue
+		}
+		if !isValidHTTPURL(rawURL) {
+			http.Error(w, `{"error":"invalid url: only http/https allowed"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	SiteSettingsMu.Lock()
 	SiteSettingsData = s
 	SiteSettingsMu.Unlock()
@@ -282,16 +324,20 @@ func HandleUserGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	UsersMu.RUnlock()
 	SiteSettingsMu.RLock()
-	allowTheme := SiteSettingsData.AllowUserTheme
-	allowQR    := SiteSettingsData.AllowQR
-	qrLogoURL  := SiteSettingsData.QRLogoURL
+	allowTheme  := SiteSettingsData.AllowUserTheme
+	allowQR     := SiteSettingsData.AllowQR
+	qrLogoURL   := SiteSettingsData.QRLogoURL
+	allowMCP    := SiteSettingsData.AllowUserMCP
+	mcpMaxPerms := SiteSettingsData.UserMCPDefaultPerms
 	SiteSettingsMu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"settings":    liveSettings,
-		"allow_theme": allowTheme,
-		"allow_qr":    allowQR,
-		"qr_logo_url": qrLogoURL,
+		"settings":       liveSettings,
+		"allow_theme":    allowTheme,
+		"allow_qr":       allowQR,
+		"qr_logo_url":    qrLogoURL,
+		"allow_mcp":      allowMCP,
+		"mcp_max_perms":  mcpMaxPerms,
 	})
 }
 
@@ -307,19 +353,51 @@ func HandleUserSaveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+
+	// SECURITY: Clamp user MCP permissions to admin-defined maximums.
+	// A user cannot request permissions that admin hasn't allowed globally.
+	SiteSettingsMu.RLock()
+	allowMCP    := SiteSettingsData.AllowUserMCP
+	mcpMaxPerms := SiteSettingsData.UserMCPDefaultPerms
+	SiteSettingsMu.RUnlock()
+
+	if !allowMCP {
+		// Admin disabled user MCP — force it off regardless of what user sent
+		s.MCP.Enabled = false
+	}
+	// Clamp each permission bit: user cannot exceed admin-set maximum
+	s.MCP.Permissions.CanRead    = s.MCP.Permissions.CanRead    && mcpMaxPerms.CanRead
+	s.MCP.Permissions.CanUpload  = s.MCP.Permissions.CanUpload  && mcpMaxPerms.CanUpload
+	s.MCP.Permissions.CanDelete  = s.MCP.Permissions.CanDelete  && mcpMaxPerms.CanDelete
+	s.MCP.Permissions.CanCreate  = s.MCP.Permissions.CanCreate  && mcpMaxPerms.CanCreate
+	s.MCP.Permissions.CanRename  = s.MCP.Permissions.CanRename  && mcpMaxPerms.CanRename
+	s.MCP.Permissions.CanStorage = s.MCP.Permissions.CanStorage && mcpMaxPerms.CanStorage
+	// Users can NEVER manage other users via MCP — regardless of admin settings
+	s.MCP.Permissions.CanUsers = false
+
 	// Re-fetch from the live Users map to avoid stale pointer
 	UsersMu.Lock()
 	if live, ok := Users[u.UUID]; ok {
 		live.Settings = s
 		if Debug {
-			log.Printf("[SETTINGS] user=%s saved settings: bg=%q music=%q lang=%q direct_links=%v",
-				u.Username, s.BackgroundURL, s.BgMusicURL, s.Language, s.ShowDirectLinks)
+			log.Printf("[SETTINGS] user=%s saved settings: bg=%q music=%q lang=%q direct_links=%v mcp_enabled=%v",
+				u.Username, s.BackgroundURL, s.BgMusicURL, s.Language, s.ShowDirectLinks, s.MCP.Enabled)
 		}
 	}
 	UsersMu.Unlock()
 	go SaveUsers()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// isValidHTTPURL returns true if s is a valid http or https URL (or empty).
+// Used to validate URL fields in SiteSettings before saving.
+func isValidHTTPURL(s string) bool {
+	if s == "" {
+		return true
+	}
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // HandleLangStrings serves translation strings for the current user/site language.

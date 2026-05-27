@@ -104,6 +104,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 <span class="keyboard-hint">Ctrl+F: Search | Ctrl+A: Select All</span>
                 <button class="btn" onclick="openCreateFolderModal()" data-i18n="nav_new_folder">New Folder</button>
                 <button class="btn" onclick="openDownloadURLModal()" title="Download file from URL" data-i18n="nav_download_url">Download URL</button>
+                <button class="btn" onclick="openSettingsPanel()" title="Settings" style="padding:6px 10px;" data-i18n="nav_settings">⚙ Settings</button>
                 <a href="/ad" class="btn" data-i18n="nav_my_account">My Account</a>
                 <a href="/logout" class="btn" style="background:#c62828;" data-i18n="nav_logout">Logout</a>
             </div>
@@ -289,6 +290,76 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             </div>
             <div class="modal-footer">
                 <button class="btn-small" onclick="closeModal('downloadURLModal')" data-i18n="modal_close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal" style="display:none;">
+        <div class="modal-content" style="max-width:520px;">
+            <div class="modal-header">
+                <h3>My Settings</h3>
+                <button class="close-btn" onclick="closeSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px;">
+                <div class="info-row" id="us-theme-row" style="display:none;">
+                    <span class="info-label">Theme</span>
+                    <select id="us-theme" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;">
+                        <option value="default">Default</option>
+                        <option value="dark">Dark</option>
+                        <option value="liquid">Liquid Glass</option>
+                    </select>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Background URL</span>
+                    <input type="text" id="us-bg" placeholder="https://..." style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:260px;">
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Background Music URL</span>
+                    <input type="text" id="us-music" placeholder="https://..." style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:260px;">
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Language</span>
+                    <select id="us-lang" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;">
+                        <option value="en">English</option>
+                        <option value="vi">Tiếng Việt</option>
+                        <option value="zh">中文</option>
+                        <option value="ja">日本語</option>
+                        <option value="ko">한국어</option>
+                    </select>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Show Direct Links</span>
+                    <label class="toggle-switch"><input type="checkbox" id="us-direct-links"><span class="toggle-slider"></span></label>
+                </div>
+
+                <!-- MCP Server (shown only when admin allows) -->
+                <div id="us-mcp-section" style="display:none;margin-top:20px;padding-top:16px;border-top:1px solid #e0e0e0;">
+                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:8px;">MCP Server (AI Agent)</div>
+                    <div style="font-size:11px;color:#aaa;margin-bottom:12px;">Let an AI agent manage your files using your API token. Never uses admin access.</div>
+                    <div class="info-row">
+                        <span class="info-label">Enable my MCP</span>
+                        <label class="toggle-switch"><input type="checkbox" id="us-mcp-enabled"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div id="us-mcp-perms" style="display:none;padding:10px 0 4px;">
+                        <div style="font-size:11px;color:#888;margin-bottom:8px;">Allowed operations (grey = blocked by admin):</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px 20px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-read"> Read &amp; list</label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-upload"> Upload</label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-create"> Create folder</label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-rename"> Rename</label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span></label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-storage"> Storage info</label>
+                        </div>
+                        <div style="font-size:11px;color:#aaa;margin-top:8px;">
+                            Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-small" onclick="closeSettingsModal()">Cancel</button>
+                <button class="btn-small" onclick="saveUserSettings()">Save Settings</button>
             </div>
         </div>
     </div>

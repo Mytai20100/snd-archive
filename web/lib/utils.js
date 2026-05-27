@@ -113,7 +113,16 @@ function closeModal(id) {
     if (el) el.style.display = 'none';
 }
 
-// Close modals when clicking on the backdrop
+/**
+ * Open a modal by its element id using flex display for proper centering.
+ * @param {string} id
+ */
+function openModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'flex';
+}
+
+// Close modals when clicking on the backdrop (not on modal-content)
 window.addEventListener('click', e => {
     if (e.target && e.target.classList.contains('modal')) {
         closeModal(e.target.id);

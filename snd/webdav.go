@@ -15,6 +15,20 @@ import (
 // Authentication: HTTP Basic Auth (admin username/password from config, or sub-user creds)
 // Scope: Admin sees public/, sub-user sees public/<uuid>/
 func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
+	// HIGH-2 FIX: Apply brute-force protection before processing Basic Auth.
+	// /login has rate-limiting, but /dav/ was unprotected — attackers could
+	// brute-force admin/user passwords without any throttling.
+	ip := GetClientIP(r)
+	AdminLoginMu.RLock()
+	ban, hasBan := AdminLoginBans[ip]
+	banned := hasBan && time.Now().Before(ban.BanExpires)
+	AdminLoginMu.RUnlock()
+	if banned {
+		w.Header().Set("WWW-Authenticate", `Basic realm="snd-archive WebDAV"`)
+		http.Error(w, "Too many failed attempts", http.StatusTooManyRequests)
+		return
+	}
+
 	// HTTP Basic Auth
 	username, password, ok := r.BasicAuth()
 	if !ok {
@@ -28,12 +42,32 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		u := GetUserByUsername(username)
 		if u == nil || !u.IsActive || !CheckPassword(u.PasswordHash, password) {
+			// Record failed attempt using same ban logic as /login
+			AdminLoginMu.Lock()
+			b, exists := AdminLoginBans[ip]
+			if !exists {
+				b = &AdminLoginBan{}
+				AdminLoginBans[ip] = b
+			}
+			b.FailCount++
+			d := BanLevel(b.FailCount)
+			if d > 0 {
+				b.BanExpires = time.Now().Add(d)
+				b.BanDuration = d
+			}
+			AdminLoginMu.Unlock()
+			AppendSecurityEvent(ip, SecEvtLoginFail, "WebDAV login failed for user: "+username, username)
 			w.Header().Set("WWW-Authenticate", `Basic realm="snd-archive WebDAV"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		davUser = u
 	}
+
+	// Clear failed attempts on successful auth
+	AdminLoginMu.Lock()
+	delete(AdminLoginBans, ip)
+	AdminLoginMu.Unlock()
 
 	// Determine filesystem root for this user
 	var fsRoot string

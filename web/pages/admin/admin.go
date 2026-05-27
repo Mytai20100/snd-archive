@@ -317,6 +317,92 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         <input type="text" id="as-embed-img" placeholder="https://..." style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:300px;">
                     </div>
                 </div>
+
+                <!-- ── MCP Server ───────────────────────────────────────────── -->
+                <div style="margin-top:24px;padding-top:20px;border-top:1px solid #e0e0e0;">
+                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:12px;">MCP Server (AI Agent API)</div>
+                    <div style="font-size:11px;color:#aaa;margin-bottom:14px;">
+                        Allow AI agents (Claude, GPT, etc.) to manage files via the Model Context Protocol.<br>
+                        Admin MCP uses the server API token. User MCP uses each user's own token — fully isolated.
+                    </div>
+
+                    <div style="font-size:11px;color:#666;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Admin MCP</div>
+                    <div class="info-row">
+                        <span class="info-label">Enable Admin MCP</span>
+                        <label class="toggle-switch"><input type="checkbox" id="mcp-admin-enabled"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div id="mcp-admin-details" style="display:none;margin-left:0;padding:12px 0 4px 0;">
+                        <div class="info-row" style="margin-bottom:6px;">
+                            <span class="info-label" style="font-size:12px;color:#888;">Rate limit (calls/min)</span>
+                            <input type="number" id="mcp-admin-ratelimit" value="60" min="1" max="600" style="width:80px;padding:5px 8px;border:1px solid #d0d0d0;border-radius:4px;font-size:13px;">
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-bottom:10px;">Permissions (what AI agent can do as admin):</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:10px 24px;margin-bottom:8px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-read"> Read &amp; list files
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-upload"> Upload
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-create"> Create folder
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-rename"> Rename / move
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-storage"> Storage info
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-admin-perm-users"> Manage users
+                            </label>
+                        </div>
+                        <div style="font-size:11px;color:#aaa;margin-top:4px;">
+                            Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/admin/call</code> &nbsp;
+                            Tool graph: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">GET /mcp/admin/info</code>
+                        </div>
+                    </div>
+
+                    <div style="font-size:11px;color:#666;font-weight:600;margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px;">User MCP</div>
+                    <div class="info-row">
+                        <span class="info-label">Allow users to enable MCP</span>
+                        <label class="toggle-switch"><input type="checkbox" id="mcp-allow-user"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div id="mcp-user-details" style="display:none;padding:12px 0 4px 0;">
+                        <div style="font-size:11px;color:#888;margin-bottom:10px;">
+                            Maximum permissions users can grant to their MCP agent.<br>
+                            Users cannot exceed these limits. CanUsers is always blocked for users.
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:10px 24px;margin-bottom:8px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-read"> Read &amp; list files
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-upload"> Upload
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-create"> Create folder
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-rename"> Rename / move
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                                <input type="checkbox" id="mcp-user-perm-storage"> Storage info
+                            </label>
+                        </div>
+                        <div style="font-size:11px;color:#aaa;margin-top:4px;">
+                            User endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code> — scoped to user's own directory, using their API token only.
+                        </div>
+                    </div>
+                </div>
+                <!-- ── end MCP ───────────────────────────────────────────────── -->
+
                 <div style="margin-top:20px;">
                     <button class="btn" onclick="saveAdminSettings()">Save Settings</button>
                 </div>
@@ -577,6 +663,46 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
             <span class="info-label">Enable QR Code</span>
             <label class="toggle-switch"><input type="checkbox" id="us-enable-qr"><span class="toggle-slider"></span></label>
         </div>
+
+        <!-- User MCP (only shown when admin allows it) -->
+        <div id="us-mcp-section" style="display:none;margin-top:20px;padding-top:16px;border-top:1px solid #e0e0e0;">
+            <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:10px;">MCP Server (AI Agent)</div>
+            <div style="font-size:11px;color:#aaa;margin-bottom:12px;">
+                Lets an AI agent manage your files. Uses your API token only — never admin access.
+            </div>
+            <div class="info-row">
+                <span class="info-label">Enable my MCP</span>
+                <label class="toggle-switch"><input type="checkbox" id="us-mcp-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div id="us-mcp-perms" style="display:none;padding:10px 0 4px 0;">
+                <div style="font-size:11px;color:#888;margin-bottom:8px;">What the AI agent can do (limited by admin policy):</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px 20px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-read"> Read &amp; list
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-upload"> Upload
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-create"> Create folder
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-rename"> Rename
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+                        <input type="checkbox" id="us-mcp-perm-storage"> Storage info
+                    </label>
+                </div>
+                <div style="font-size:11px;color:#aaa;margin-top:8px;">
+                    Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code> &nbsp;
+                    Info: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">GET /mcp/user/info</code>
+                </div>
+            </div>
+        </div>
+
         <div style="margin-top:16px;">
             <button class="btn" onclick="saveUserSettings()">Save Settings</button>
         </div>

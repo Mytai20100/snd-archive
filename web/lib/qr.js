@@ -53,30 +53,45 @@
 })();
 
 function generateQR(filename) {
-    // Resolve the direct file URL for this file (public token URL or authed URL)
+    // Resolve the direct file URL for this file (public token URL or authed URL).
+    // SECURITY: never append ?token= (API token) to QR URLs for unauthenticated visitors.
+    // The QR image may be shared publicly — leaking the admin API token would allow
+    // anyone who scans it to bypass all file permission checks.
     var url;
+    var guestMode = (typeof isAuthenticated !== 'undefined' && !isAuthenticated);
+
     if (typeof allFiles !== 'undefined') {
         var f = allFiles.find(function(x) {
             var fp = (typeof currentPath !== 'undefined' && currentPath)
                 ? currentPath + '/' + x.name : x.name;
             return fp === filename || x.name === filename;
         });
-        if (f && f.is_public && f.public_token) {
-            // Build direct public URL — works in both admin and user dash
-            if (typeof makePublicURL === 'function') {
-                url = makePublicURL(filename, f.public_token);
+        if (f && f.is_public) {
+            // Public file: build a clean public URL.
+            // Use pt= token if available; otherwise the bare /raw/ URL is enough
+            // since public files are accessible without any token.
+            var base = window.location.origin + '/raw/' + encodeURIComponent(filename);
+            if (f.public_token) {
+                url = base + '?pt=' + encodeURIComponent(f.public_token);
             } else {
-                url = window.location.origin + '/raw/' + encodeURIComponent(filename)
-                    + '?pt=' + encodeURIComponent(f.public_token);
+                url = base; // public without pt= — still works
             }
-        } else if (typeof makePrivateURL === 'function') {
-            url = makePrivateURL(filename);
-        } else if (typeof addTokenToURL === 'function') {
-            url = addTokenToURL(window.location.origin + '/raw/' + encodeURIComponent(filename));
+        } else if (!guestMode) {
+            // Authenticated user — safe to use authed URL
+            if (typeof makePrivateURL === 'function') {
+                url = makePrivateURL(filename);
+            } else if (typeof addTokenToURL === 'function') {
+                url = addTokenToURL(window.location.origin + '/raw/' + encodeURIComponent(filename));
+            } else {
+                url = window.location.origin + '/raw/' + encodeURIComponent(filename);
+            }
         } else {
+            // Guest + private file — should not happen since /files filters these out,
+            // but guard anyway: show plain URL (server will block it).
             url = window.location.origin + '/raw/' + encodeURIComponent(filename);
         }
-    } else if (typeof addTokenToURL === 'function') {
+    } else if (!guestMode && typeof addTokenToURL === 'function') {
+        // Fallback for user-dash where allFiles may be named differently
         url = addTokenToURL(window.location.origin + '/raw/' + encodeURIComponent(filename));
     } else {
         url = window.location.origin + '/raw/' + encodeURIComponent(filename);

@@ -2,7 +2,9 @@ package snd
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	h "html"
@@ -470,6 +472,7 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 				FileMetadata: FileMetadata{
 					Name:          file.Name(),
 					Type:          GetFileType(file.Name()),
+					Icon:          GetIconName(file.Name(), false),
 					Size:          info.Size(),
 					ModTime:       info.ModTime(),
 					DownloadCount: count,
@@ -520,6 +523,7 @@ func HandlePublicFiles(w http.ResponseWriter, r *http.Request) {
 			FileMetadata: FileMetadata{
 				Name:          f.Name(),
 				Type:          GetFileType(f.Name()),
+				Icon:          GetIconName(f.Name(), false),
 				Size:          info.Size(),
 				ModTime:       info.ModTime(),
 				DownloadCount: count,
@@ -605,6 +609,7 @@ func walkUserPublicFiles(dir string, u *UserAccount, relBase string, out *[]File
 			FileMetadata: FileMetadata{
 				Name:          displayName,
 				Type:          GetFileType(displayName),
+				Icon:          GetIconName(displayName, false),
 				Size:          info.Size(),
 				ModTime:       info.ModTime(),
 				DownloadCount: count,
@@ -1332,46 +1337,93 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No files specified", http.StatusBadRequest)
 		return
 	}
+	if len(req.Files) > 500 {
+		http.Error(w, "Too many files", http.StatusBadRequest)
+		return
+	}
 
-	baseDir, _ := resolveBaseDir(r)
+	isAuth := IsAuthenticated(r)
+	baseDir, permPrefix := resolveBaseDir(r)
 
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"archive.zip\"")
-	zipWriter := zip.NewWriter(w)
-	defer zipWriter.Close()
+	// Collect file data first into memory, check permissions, then write zip.
+	// Streaming zip directly to http.ResponseWriter is unsafe: once the first byte
+	// is sent the 200 status is committed, so a mid-stream error silently produces
+	// a truncated/corrupt zip with no error visible to the client.
+	type entry struct {
+		name string
+		data []byte
+	}
+	var entries []entry
 
 	for _, filename := range req.Files {
-		// FIX: validate each file path
+		filename = strings.TrimLeft(filename, "/")
 		filePath, ok := safePath(baseDir, filename)
 		if !ok {
 			continue
 		}
-		file, err := os.Open(filePath)
+		// Unauthenticated users may only zip files that are public.
+		if !isAuth {
+			permKey := permPrefix + filename
+			dirKey  := permPrefix + filepath.Dir(filename)
+			if dirKey == permPrefix+"." {
+				dirKey = permPrefix
+			}
+			PermissionMu.RLock()
+			fp, fExists := FilePermissions[permKey]
+			dp, dExists := FolderPermissions[dirKey]
+			PermissionMu.RUnlock()
+			filePublic   := fExists && fp.IsPublic
+			folderPublic := dExists && dp.IsPublic
+			if !filePublic && !folderPublic {
+				continue // silently skip private files for guests
+			}
+		}
+		data, err := os.ReadFile(filePath)
 		if err != nil {
 			continue
 		}
-		info, err := file.Stat()
-		if err != nil {
-			file.Close()
-			continue
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			file.Close()
-			continue
-		}
-		header.Name = filename
-		header.Method = zip.Deflate
-		writer, err := zipWriter.CreateHeader(header)
-		if err != nil {
-			file.Close()
-			continue
-		}
-		io.Copy(writer, file)
-		file.Close()
+		entries = append(entries, entry{name: filename, data: data})
 	}
+
+	if len(entries) == 0 {
+		if isAuth {
+			http.Error(w, "No files found", http.StatusNotFound)
+		} else {
+			http.Error(w, "No public files to zip", http.StatusForbidden)
+		}
+		return
+	}
+
+	// Build zip in-memory
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, e := range entries {
+		header := &zip.FileHeader{
+			Name:   e.name,
+			Method: zip.Deflate,
+		}
+		fw, err := zw.CreateHeader(header)
+		if err != nil {
+			continue
+		}
+		fw.Write(e.data)
+	}
+	if err := zw.Close(); err != nil {
+		http.Error(w, "Failed to create ZIP", http.StatusInternalServerError)
+		return
+	}
+
+	archiveName := "archive.zip"
+	if len(req.Files) == 1 {
+		archiveName = filepath.Base(req.Files[0]) + ".zip"
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, archiveName))
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.Write(buf.Bytes())
+
 	if Debug {
-		log.Printf("Created ZIP with %d files", len(req.Files))
+		log.Printf("Created ZIP with %d files (%d bytes)", len(entries), buf.Len())
 	}
 }
 
@@ -2662,6 +2714,56 @@ func validateDownloadURL(raw string) error {
 	return nil
 }
 
+// makeSSRFSafeClient resolves the host ONCE, validates the IP, then returns an
+// http.Client whose dialer is pinned to that IP — preventing DNS rebinding attacks
+// where the first lookup returns a public IP (passes validation) but subsequent
+// lookups return 127.0.0.1 or another internal address.
+//
+// HIGH-3 FIX: validateDownloadURL + a second http.Get both call net.LookupHost
+// independently, giving a race window for DNS rebinding. This function closes
+// that window by pinning the connection to the pre-validated IP.
+func makeSSRFSafeClient(rawURL string) (*http.Client, error) {
+	u, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL")
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		if strings.ToLower(u.Scheme) == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	// Resolve once; validateDownloadURL already checked all addrs are public.
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return nil, fmt.Errorf("cannot resolve host")
+	}
+	pinnedIP := addrs[0]
+	pinnedAddr := net.JoinHostPort(pinnedIP, port)
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			// Always connect to the pre-validated IP, ignoring whatever DNS would return now.
+			return (&net.Dialer{}).DialContext(ctx, network, pinnedAddr)
+		},
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   30 * 60 * 1_000_000_000, // 30 min
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			// Re-validate each redirect target (different host → new DNS check + pin)
+			return validateDownloadURL(req.URL.String())
+		},
+	}, nil
+}
+
 // POST /download-url   body JSON: {"url":"https://...","path":"optional/subdir"}
 func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -2715,19 +2817,12 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(saveDir, filename)
 
-	// Fetch with a size limit (512 MB) and timeout
-	client := &http.Client{
-		Timeout: 30 * 60 * 1000000000, // 30 min in nanoseconds
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			// Re-validate after redirect
-			if err := validateDownloadURL(req.URL.String()); err != nil {
-				return err
-			}
-			return nil
-		},
+	// HIGH-3 FIX: Use SSRF-safe client that pins DNS resolution to prevent rebinding.
+	client, err := makeSSRFSafeClient(req.URL)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
 	}
 	resp, err := client.Get(req.URL)
 	if err != nil {

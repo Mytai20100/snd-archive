@@ -43,13 +43,20 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	if isAuth {
 		authStatus = "true"
-		_ = isAdminUser
 		authButtons = `<button class="btn" onclick="openCreateFolderModal()" data-i18n="nav_new_folder">New Folder</button>
                        <button class="btn" onclick="openDownloadURLModal()" title="Download file from URL" data-i18n="nav_download_url">Download URL</button>
                        <a href="/ad" class="btn" data-i18n="nav_admin">Admin</a>
                        <a href="#" onclick="logout(); return false;" class="btn" data-i18n="nav_logout">Logout</a>`
 		uploadSectionDisplay = "block"
-		apiTokenSection = fmt.Sprintf(`
+		// CRIT-4 FIX: Only embed Cfg.APIToken for true admin. Sub-users get their own token.
+		var tokenToEmbed string
+		if isAdminUser {
+			tokenToEmbed = snd.Cfg.APIToken
+		} else if u := snd.GetSessionUser(r); u != nil {
+			tokenToEmbed = u.APIToken
+		}
+		if tokenToEmbed != "" {
+			apiTokenSection = fmt.Sprintf(`
         <div class="upload-section" id="apiTokenSection" style="background:#fff3e0;border:2px solid #f57c00;position:relative;">
             <button onclick="closeApiTokenSection()" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;color:#e65100;cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;" title="Hide">&times;</button>
             <div style="padding:12px;">
@@ -64,7 +71,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     Token is automatically added to file URLs.
                 </div>
             </div>
-        </div>`, snd.Cfg.APIToken)
+        </div>`, tokenToEmbed)
+		}
 	}
 
 	html := `<!DOCTYPE html>
@@ -275,8 +283,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         // Unauthenticated visitors must never see the admin API token, because
         // it could be used to bypass file-permission checks on private files.
         const _apiToken = ` + func() string {
-	if isAuth {
+	if isAdminUser {
 		return "'" + snd.Cfg.APIToken + "'"
+	}
+	if isAuth {
+		if u := snd.GetSessionUser(r); u != nil {
+			return "'" + u.APIToken + "'"
+		}
 	}
 	return "''"
 }() + `;
@@ -319,11 +332,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             loadFiles();
             // Flush any early click on Download URL button before scripts loaded
             if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
-            // Load QR settings for admin
-            fetch('/admin/settings').then(function(r){return r.json();}).then(function(s){
-                window._qrEnabled = !!s.allow_qr;
-                window._qrLogoURL = s.qr_logo_url || '';
-            }).catch(function(){});
+            // QR settings embedded server-side so they work for both authenticated and
+            // guest users. Previously this fetched /admin/settings which requires auth,
+            // so unauthenticated visitors never got _qrEnabled=true and the QR button
+            // never appeared in the context menu for public files.
+            window._qrEnabled = ` + func() string {
+	snd.SiteSettingsMu.RLock()
+	defer snd.SiteSettingsMu.RUnlock()
+	if snd.SiteSettingsData.AllowQR {
+		return "true"
+	}
+	return "false"
+}() + `;
+            window._qrLogoURL = ` + func() string {
+	snd.SiteSettingsMu.RLock()
+	defer snd.SiteSettingsMu.RUnlock()
+	if snd.SiteSettingsData.QRLogoURL != "" {
+		return "'" + snd.SiteSettingsData.QRLogoURL + "'"
+	}
+	return "''"
+}() + `;
         });
     </script>
 ` + snd.ThemeSnippet("dashboard") + `

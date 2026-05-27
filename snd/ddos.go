@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -15,11 +16,33 @@ import (
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 type DDoSConfig struct {
-	Enabled             bool     `yaml:"enabled"               json:"enabled"`
-	RateWindowSec       int      `yaml:"rate_window_sec"        json:"rate_window_sec"`
-	MaxRequestsPerWindow int     `yaml:"max_requests_per_window" json:"max_requests_per_window"`
-	BanDurationMin      int      `yaml:"ban_duration_min"       json:"ban_duration_min"`
-	WhitelistIPs        []string `yaml:"whitelist_ips"          json:"whitelist_ips"`
+	Enabled              bool     `yaml:"enabled"               json:"enabled"`
+	RateWindowSec        int      `yaml:"rate_window_sec"        json:"rate_window_sec"`
+	MaxRequestsPerWindow int      `yaml:"max_requests_per_window" json:"max_requests_per_window"`
+	BanDurationMin       int      `yaml:"ban_duration_min"       json:"ban_duration_min"`
+	WhitelistIPs         []string `yaml:"whitelist_ips"          json:"whitelist_ips"`
+	// NEW-2: GlobalMaxRPS caps total server requests per second across ALL IPs.
+	// Protects against botnet attacks where each individual IP stays under the per-IP limit.
+	// 0 = disabled (default). Recommended: 1000–5000 depending on server capacity.
+	GlobalMaxRPS int `yaml:"global_max_rps" json:"global_max_rps"`
+
+	// ─── L7 application-layer protection ─────────────────────────────────────
+	// BlockEmptyUA: reject requests with no User-Agent (most real browsers always send one).
+	// Effective against simple botnets and scanners that omit the UA header.
+	BlockEmptyUA bool `yaml:"block_empty_ua" json:"block_empty_ua"`
+
+	// MaxBodyMB: maximum request body size in megabytes (0 = unlimited).
+	// Prevents HTTP flood variants that send huge bodies to exhaust memory/CPU.
+	// Recommended: 512 (matches typical upload limit). Upload handler enforces its own limit.
+	MaxBodyMB int `yaml:"max_body_mb" json:"max_body_mb"`
+
+	// BlockSuspiciousUA: block known bad bots / scanner user-agents.
+	BlockSuspiciousUA bool `yaml:"block_suspicious_ua" json:"block_suspicious_ua"`
+
+	// ConnectionsPerIP: max simultaneous in-flight requests from a single IP (0 = unlimited).
+	// L4-style concurrent connection cap enforced at the HTTP handler level.
+	// Recommended: 50-100. Protects against connection exhaustion without SYN-level access.
+	ConnectionsPerIP int `yaml:"connections_per_ip" json:"connections_per_ip"`
 }
 
 type DDoSBannedIP struct {
@@ -53,6 +76,14 @@ var (
 	ddosCounters   = make(map[string][]time.Time)
 	ddosCountersMu sync.Mutex
 
+	// NEW-2: Global RPS counter — tracks ALL requests across all IPs in the last second.
+	globalRPSTimestamps []time.Time
+	globalRPSMu         sync.Mutex
+
+	// L7: per-IP concurrent in-flight request counter
+	connPerIP   = make(map[string]int)
+	connPerIPMu sync.Mutex
+
 	// Traffic stats: date string → sample
 	trafficStats   = make(map[string]*DailyTrafficSample)
 	trafficStatsMu sync.Mutex
@@ -76,6 +107,35 @@ func LoadDDoSConfig() {
 	}
 	loadDDoSBans()
 	loadAllowList()
+	// NEW-1 FIX: Start background cleanup to prevent ddosCounters memory leak.
+	// Without this, IPs that attack once and never return accumulate forever —
+	// a botnet of 100k IPs hitting once/hour will OOM the server.
+	go startDDoSCounterCleanup()
+}
+
+// startDDoSCounterCleanup periodically removes stale entries from ddosCounters.
+// Entries are pruned if all their timestamps are outside the current rate window,
+// meaning the IP has been quiet long enough that its counter can be freed.
+func startDDoSCounterCleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	for range ticker.C {
+		cutoff := time.Now().Add(-time.Duration(DDoSCfg.RateWindowSec) * time.Second)
+		ddosCountersMu.Lock()
+		for ip, times := range ddosCounters {
+			pruned := times[:0]
+			for _, t := range times {
+				if t.After(cutoff) {
+					pruned = append(pruned, t)
+				}
+			}
+			if len(pruned) == 0 {
+				delete(ddosCounters, ip) // IP has been quiet — free the entry
+			} else {
+				ddosCounters[ip] = pruned
+			}
+		}
+		ddosCountersMu.Unlock()
+	}
 }
 
 func saveDDoSConfig() {
@@ -123,6 +183,7 @@ func DDoSMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 		windowSec := DDoSCfg.RateWindowSec
 		banMin := DDoSCfg.BanDurationMin
 		whitelist := DDoSCfg.WhitelistIPs
+		globalMaxRPS := DDoSCfg.GlobalMaxRPS
 		DDoSCfgMu.RUnlock()
 
 		if !enabled {
@@ -130,7 +191,82 @@ func DDoSMiddleware(handler http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		// NEW-2 FIX: Global RPS cap — protects against distributed botnet attacks
+		// where each IP stays under the per-IP limit but the aggregate load kills the server.
+		if globalMaxRPS > 0 {
+			now2 := time.Now()
+			cutoff2 := now2.Add(-time.Second)
+			globalRPSMu.Lock()
+			pruned2 := globalRPSTimestamps[:0]
+			for _, t := range globalRPSTimestamps {
+				if t.After(cutoff2) {
+					pruned2 = append(pruned2, t)
+				}
+			}
+			pruned2 = append(pruned2, now2)
+			globalRPSTimestamps = pruned2
+			globalCount := len(pruned2)
+			globalRPSMu.Unlock()
+			if globalCount > globalMaxRPS {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "Server busy — try again shortly.", http.StatusServiceUnavailable)
+				return
+			}
+		}
+
+		// ── L7 application-layer checks ──────────────────────────────────────────
+		DDoSCfgMu.RLock()
+		blockEmptyUA    := DDoSCfg.BlockEmptyUA
+		blockSuspUA     := DDoSCfg.BlockSuspiciousUA
+		maxBodyMB       := DDoSCfg.MaxBodyMB
+		connLimit       := DDoSCfg.ConnectionsPerIP
+		DDoSCfgMu.RUnlock()
+
+		// Block empty User-Agent (most legitimate browsers always send one)
+		if blockEmptyUA && r.Header.Get("User-Agent") == "" {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Block known scanner / bad-bot User-Agents
+		if blockSuspUA {
+			ua := r.Header.Get("User-Agent")
+			if isSuspiciousUA(ua) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+		}
+
+		// Enforce max request body size to prevent memory exhaustion floods
+		if maxBodyMB > 0 && r.ContentLength > int64(maxBodyMB)*1024*1024 {
+			http.Error(w, "Request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		ip := GetClientIP(r)
+
+		// ── L4-style concurrent connection cap per IP ────────────────────────────
+		if connLimit > 0 {
+			connPerIPMu.Lock()
+			connPerIP[ip]++
+			current := connPerIP[ip]
+			connPerIPMu.Unlock()
+			defer func() {
+				connPerIPMu.Lock()
+				if connPerIP[ip] > 0 {
+					connPerIP[ip]--
+				}
+				if connPerIP[ip] == 0 {
+					delete(connPerIP, ip)
+				}
+				connPerIPMu.Unlock()
+			}()
+			if current > connLimit {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "Too many concurrent requests from your IP", http.StatusTooManyRequests)
+				return
+			}
+		}
 
 		// Allowlist check (trusted IPs bypass all rate-limiting)
 		if IsAllowlisted(ip) {
@@ -594,4 +730,39 @@ func HandleDeleteAllowlist(w http.ResponseWriter, r *http.Request) {
 	allowListMu.Unlock()
 	go saveAllowList()
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+
+// ─── L7 helpers ──────────────────────────────────────────────────────────────
+
+// isSuspiciousUA returns true for known scanner, bot, or attack tool User-Agents.
+// This is a lightweight heuristic — not a substitute for a WAF, but blocks the
+// most common automated scanners that send recognisable strings.
+func isSuspiciousUA(ua string) bool {
+	if ua == "" {
+		return false // handled separately by BlockEmptyUA
+	}
+	// Lowercase for case-insensitive matching
+	lua := strings.ToLower(ua)
+	badPrefixes := []string{
+		"python-requests", "go-http-client/1", "curl/", "wget/",
+		"masscan", "nmap", "nikto", "sqlmap", "dirbuster", "gobuster",
+		"wfuzz", "hydra", "medusa", "zgrab", "zmap",
+		"nuclei", "acunetix", "nessus", "openvas",
+		"scrapy", "phantomjs", "headlesschrome", "python/",
+		"ahrefsbot", "semrushbot", "mj12bot", "dotbot",
+	}
+	for _, prefix := range badPrefixes {
+		if strings.HasPrefix(lua, prefix) {
+			return true
+		}
+	}
+	// Also block if the UA contains known attack tool signatures
+	attackSigs := []string{"sqlmap", "nikto", "nessus", "acunetix", "masscan", "zgrab"}
+	for _, sig := range attackSigs {
+		if strings.Contains(lua, sig) {
+			return true
+		}
+	}
+	return false
 }

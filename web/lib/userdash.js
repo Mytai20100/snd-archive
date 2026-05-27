@@ -37,7 +37,7 @@ function showPreview(filename, type) {
         document.getElementById('viewBody').innerHTML =
             '<div style="text-align:center;padding:8px;"><img src="' + rawUrl + '" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:4px;" alt="' + escapeHtml(baseName) + '"></div>' +
             '<div style="text-align:center;margin-top:12px;"><button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> <button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
-        document.getElementById('viewModal').style.display = 'block';
+        openModal('viewModal');
         return;
     }
     if (type === 'video' || type === 'audio') {
@@ -47,7 +47,7 @@ function showPreview(filename, type) {
             document.getElementById('viewBody').innerHTML =
                 '<video id="hlsPlayer" controls autoplay playsinline style="width:100%;max-height:70vh;background:#000;border-radius:4px;"></video>' +
                 '<div style="text-align:center;margin-top:12px;"><button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> <button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
-            document.getElementById('viewModal').style.display = 'block';
+            openModal('viewModal');
             const v = document.getElementById('hlsPlayer');
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                 const h = new Hls(); h.loadSource(streamUrl); h.attachMedia(v); v.play().catch(() => {});
@@ -62,7 +62,7 @@ function showPreview(filename, type) {
             document.getElementById('viewBody').innerHTML =
                 '<' + tag + ' id="mediaPlayer" controls autoplay playsinline style="' + style + '" onended="advancePreview(1)"><source src="' + authStreamUrl + '"></' + tag + '>' +
                 '<div style="text-align:center;margin-top:12px;"><button class="btn" onclick="advancePreview(-1)">&#8592; Prev</button> <button class="btn" onclick="advancePreview(1)">Next &#8594;</button></div>';
-            document.getElementById('viewModal').style.display = 'block';
+            openModal('viewModal');
         }
         return;
     }
@@ -270,11 +270,11 @@ function loadFiles() {
             if (f.type === 'image' || f.type === 'video') {
                 const thumbSrc = '/thumbnail/' + encodeURIComponent(fullFileName);
                 html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
-                    '<img src="' + thumbSrc + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + f.type + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
+                    '<img src="' + thumbSrc + '" loading="lazy" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.parentNode.style.cssText+=\'background:#f5f5f5;background-image:url(/icons/' + (f.icon || f.type) + '.svg);background-repeat:no-repeat;background-position:center;background-size:36px\'">' +
                     '</div>';
             } else {
                 html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f5f5f5;display:flex;align-items:center;justify-content:center;">' +
-                    '<img src="/icons/' + f.type + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
+                    '<img src="/icons/' + (f.icon || f.type) + '.svg" style="width:36px;height:36px;opacity:0.55;" onerror="this.src=\'/icons/file.svg\'">' +
                     '</div>';
             }
             html += '<div class="file-info">';
@@ -329,7 +329,7 @@ function viewFile(filename, type) {
     if (type === 'video' || type === 'audio') { csa.player({ src: streamUrl, title: baseName, mode: 'modal', autoplay: true, loader: 'ring', theme: { accent: '#e07820', accent2: '#ffaa55' } }); return; }
     const viewBody = document.getElementById('viewBody');
     document.getElementById('viewTitle').textContent = baseName;
-    document.getElementById('viewModal').style.display = 'block';
+    openModal('viewModal');
     if (type === 'image') { viewBody.innerHTML = '<div class="media-viewer" id="imageViewer"><div class="media-viewer-inner" id="imageInner"><img src="' + rawUrl + '" id="zoomableImage"></div><div class="zoom-hint" id="zoomHint">Click to zoom in</div></div>'; setupImageZoom(); return; }
     if (type === 'archive') { viewZipContents(filename); return; }
     viewBody.innerHTML = '<div style="color:#999;padding:24px;text-align:center;">Loading...</div>';
@@ -351,7 +351,7 @@ function editFile(filename) {
     currentEditFile = filename;
     document.getElementById('editTitle').textContent = 'Edit: ' + filename.split('/').pop();
     document.getElementById('editContent').value = 'Loading...';
-    document.getElementById('editModal').style.display = 'block';
+    openModal('editModal');
     fetch(addTokenToURL('/raw/' + encodeURIComponent(filename))).then(r => r.text()).then(c => { document.getElementById('editContent').value = c; }).catch(() => { document.getElementById('editContent').value = '// Failed to load'; });
 }
 function saveFile() {
@@ -375,8 +375,8 @@ function deleteFile(filename) {
         { yesLabel: _t('btn_delete','Delete'), yesColor: '#d32f2f' }
     );
 }
-function renameFile(filename) { currentRenameFile = filename; document.getElementById('renameInput').value = filename; document.getElementById('renameModal').style.display = 'block'; document.getElementById('renameInput').select(); }
-function renameFolderDialog(fullPath, name) { currentRenameFolderPath = fullPath; document.getElementById('renameInput').value = name; document.getElementById('renameModal').style.display = 'block'; document.getElementById('renameInput').select(); document.getElementById('renameModal').dataset.mode = 'folder'; }
+function renameFile(filename) { currentRenameFile = filename; document.getElementById('renameInput').value = filename; openModal('renameModal'); document.getElementById('renameInput').select(); }
+function renameFolderDialog(fullPath, name) { currentRenameFolderPath = fullPath; document.getElementById('renameInput').value = name; openModal('renameModal'); document.getElementById('renameInput').select(); document.getElementById('renameModal').dataset.mode = 'folder'; }
 function confirmRename() {
     const newName = document.getElementById('renameInput').value.trim();
     if (!newName) { showToast(_t('validation_enter_name','Please enter a name'), 'error'); return; }
@@ -463,7 +463,7 @@ function toggleFolderPublic(folderPath, isPublic) {
 function showFolderProperties(folderPath) {
     document.getElementById('propsTitle').textContent = folderPath.split('/').pop() + '/';
     document.getElementById('propsBody').innerHTML = '<div style="color:#999;padding:24px;text-align:center;">Loading...</div>';
-    document.getElementById('propsModal').style.display = 'block';
+    openModal('propsModal');
     fetch('/folder-info/' + encodeURIComponent(folderPath)).then(r => r.json()).then(d => {
         document.getElementById('propsBody').innerHTML = '<table class="props-table"><tr><td>Name</td><td><strong>' + escapeHtml(d.name) + '/</strong></td></tr><tr><td>Files</td><td>' + d.file_count + '</td></tr><tr><td>Subfolders</td><td>' + d.folder_count + '</td></tr><tr><td>Total size</td><td>' + formatFileSize(d.total_size) + '</td></tr><tr><td>Visibility</td><td>' + (d.is_public ? '<span style="color:#2e7d32;font-weight:600;">Public</span>' : '<span style="color:#d32f2f;font-weight:600;">Private</span>') + '</td></tr></table>';
     }).catch(() => { document.getElementById('propsBody').innerHTML = '<div style="color:#d32f2f;padding:12px;">Failed to load info.</div>'; });
@@ -480,7 +480,7 @@ function deleteFolder(folderName) {
         { yesLabel: _t('btn_delete','Delete'), yesColor: '#d32f2f' }
     );
 }
-function openCreateFolderModal() { document.getElementById('folderNameInput').value = ''; document.getElementById('createFolderModal').style.display = 'block'; document.getElementById('folderNameInput').focus(); }
+function openCreateFolderModal() { document.getElementById('folderNameInput').value = ''; openModal('createFolderModal'); document.getElementById('folderNameInput').focus(); }
 function confirmCreateFolder() {
     const folderName = document.getElementById('folderNameInput').value.trim();
     if (!folderName) { showToast(_t('validation_enter_folder_name','Please enter a folder name'), 'error'); return; }
@@ -530,18 +530,70 @@ function openSettingsPanel() {
         const themeRow = document.getElementById('us-theme-row');
         if (themeRow) themeRow.style.display = data.allow_theme ? '' : 'none';
         if (document.getElementById('us-theme')) document.getElementById('us-theme').value = s.theme || 'default';
-        document.getElementById('settingsModal').style.display = 'flex';
+
+        // MCP section — only shown when admin allows user MCP
+        const mcpSec = document.getElementById('us-mcp-section');
+        if (mcpSec) {
+            mcpSec.style.display = data.allow_mcp ? '' : 'none';
+            if (data.allow_mcp) {
+                const mcp = s.mcp || {};
+                const mcpEnabled = document.getElementById('us-mcp-enabled');
+                const mcpPerms   = document.getElementById('us-mcp-perms');
+                if (mcpEnabled) {
+                    mcpEnabled.checked = !!mcp.enabled;
+                    if (mcpPerms) mcpPerms.style.display = mcp.enabled ? '' : 'none';
+                    mcpEnabled.onchange = function() {
+                        if (mcpPerms) mcpPerms.style.display = this.checked ? '' : 'none';
+                    };
+                }
+                const mp   = mcp.permissions || {};
+                const maxP = data.mcp_max_perms || {};
+                _udLoadMcpPerm('us-mcp-perm-read',    mp.can_read,    maxP.can_read);
+                _udLoadMcpPerm('us-mcp-perm-upload',  mp.can_upload,  maxP.can_upload);
+                _udLoadMcpPerm('us-mcp-perm-create',  mp.can_create,  maxP.can_create);
+                _udLoadMcpPerm('us-mcp-perm-rename',  mp.can_rename,  maxP.can_rename);
+                _udLoadMcpPerm('us-mcp-perm-delete',  mp.can_delete,  maxP.can_delete);
+                _udLoadMcpPerm('us-mcp-perm-storage', mp.can_storage, maxP.can_storage);
+            }
+        }
+
+        openModal('settingsModal');
         if (s.bg_music_url) applyUserBgMusic(s.bg_music_url);
     }).catch(() => showToast(_t('toast_error_load_settings','Failed to load settings'), 'error'));
 }
+
+function _udLoadMcpPerm(id, val, adminMax) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.checked = !!val;
+    el.disabled = !adminMax;
+    el.parentElement.style.opacity = adminMax ? '' : '0.4';
+    el.parentElement.title = adminMax ? '' : 'Not allowed by admin';
+}
+
 function closeSettingsModal() { document.getElementById('settingsModal').style.display = 'none'; }
+
 async function saveUserSettings() {
+    const _gc = id => { const el = document.getElementById(id); return el && !el.disabled ? el.checked : false; };
     const s = {
-        theme:            document.getElementById('us-theme') ? document.getElementById('us-theme').value : 'default',
-        background_url:   document.getElementById('us-bg').value,
-        bg_music_url:     document.getElementById('us-music').value,
-        language:         document.getElementById('us-lang').value,
-        show_direct_links: document.getElementById('us-direct-links').checked
+        theme:             document.getElementById('us-theme') ? document.getElementById('us-theme').value : 'default',
+        background_url:    document.getElementById('us-bg').value,
+        bg_music_url:      document.getElementById('us-music').value,
+        language:          document.getElementById('us-lang').value,
+        show_direct_links: document.getElementById('us-direct-links').checked,
+        mcp: {
+            enabled: _gc('us-mcp-enabled'),
+            rate_limit: 30,
+            permissions: {
+                can_read:    _gc('us-mcp-perm-read'),
+                can_upload:  _gc('us-mcp-perm-upload'),
+                can_create:  _gc('us-mcp-perm-create'),
+                can_rename:  _gc('us-mcp-perm-rename'),
+                can_delete:  _gc('us-mcp-perm-delete'),
+                can_storage: _gc('us-mcp-perm-storage'),
+                can_users:   false
+            }
+        }
     };
     const res = await fetch('/user/settings/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
     if (res.ok) { showToast(_t('toast_settings_saved','Settings saved'), 'success'); closeSettingsModal(); applyUserBgMusic(s.bg_music_url); applyDirectLinksVisibility(s.show_direct_links); }

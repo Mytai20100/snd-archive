@@ -197,6 +197,24 @@ func main() {
 	// ─── HTTP / HTTPS ─────────────────────────────────────────────────────────
 	addr := snd.Cfg.IP + ":" + snd.Cfg.Port
 
+	// NEW-3 FIX: Use http.Server with explicit timeouts to prevent Slowloris attacks.
+	// A bare http.ListenAndServe has no timeout — an attacker can open thousands of
+	// connections and send HTTP headers one byte at a time, exhausting goroutines.
+	// ReadHeaderTimeout is the critical one: it closes connections that don't finish
+	// sending headers within 5 seconds, blocking the classic Slowloris pattern.
+	//
+	// NOTE: WriteTimeout of 120s may cut very large file downloads.
+	// If streaming large files, raise it or reset per-request with ResponseController.
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           snd.DDoSHandler(http.DefaultServeMux),
+		ReadHeaderTimeout: 5 * time.Second,   // CRITICAL: blocks Slowloris header attacks
+		ReadTimeout:       30 * time.Second,  // blocks slow-read body attacks
+		WriteTimeout:      120 * time.Second, // blocks slow-write; raise if needed for large files
+		IdleTimeout:       120 * time.Second, // keep-alive connection timeout
+		MaxHeaderBytes:    1 << 20,           // 1 MB header limit
+	}
+
 	if snd.Cfg.UseHTTPS {
 		certMissing := false
 		if _, err := os.Stat(snd.Cfg.CertFile); os.IsNotExist(err) {
@@ -217,11 +235,11 @@ func main() {
 		}
 
 		fmt.Printf("[SND v%s] Listening on https://%s\n", snd.VERSION, addr)
-		log.Fatal(http.ListenAndServeTLS(addr, snd.Cfg.CertFile, snd.Cfg.KeyFile, snd.DDoSHandler(http.DefaultServeMux)))
+		log.Fatal(server.ListenAndServeTLS(snd.Cfg.CertFile, snd.Cfg.KeyFile))
 		return
 	}
 
 serveHTTP:
 	fmt.Printf("[SND v%s] Listening on http://%s\n", snd.VERSION, addr)
-	log.Fatal(http.ListenAndServe(addr, snd.DDoSHandler(http.DefaultServeMux)))
+	log.Fatal(server.ListenAndServe())
 }
