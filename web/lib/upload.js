@@ -1,17 +1,30 @@
-// lib/upload.js — chunked file upload
-// Requires: utils.js
+
+
 
 'use strict';
 
-// Language helper
+
 function _t(key, fallback) { return (window._lang && window._lang[key]) || fallback || key; }
 
-const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
+const CHUNK_MIN = 1 * 1024 * 1024;
+const CHUNK_MAX = 32 * 1024 * 1024;
 
-/**
- * Wire up drag-and-drop and file-input events for the upload area.
- * Call once on DOMContentLoaded.
- */
+function pickChunkSize(totalSize, throughput) {
+    if (totalSize > 0 && totalSize <= CHUNK_MIN) return totalSize;
+    let size = CHUNK_MIN;
+    if (throughput > 0) {
+        const byThroughput = Math.floor(throughput * 8);
+        if (byThroughput > size) size = byThroughput;
+    }
+    if (totalSize > 0) {
+        const bySize = Math.floor(totalSize / 8);
+        if (bySize > size) size = bySize;
+    }
+    if (size > CHUNK_MAX) size = CHUNK_MAX;
+    if (size < CHUNK_MIN) size = CHUNK_MIN;
+    return size;
+}
+
 function initUpload() {
     const uploadArea       = document.getElementById('uploadArea');
     const fileInput        = document.getElementById('fileInput');
@@ -51,10 +64,6 @@ function updateSelectedFiles() {
     selectedFilesDiv.style.display = 'block';
 }
 
-/**
- * Main upload entry point — called by the Upload button.
- * Reads currentPath from global scope (set by navigation).
- */
 function uploadFiles() {
     if (typeof isAuthenticated !== 'undefined' && !isAuthenticated) {
         showToast(_t('toast_please_login', 'Please login to upload files'), 'error');
@@ -76,7 +85,7 @@ function uploadFiles() {
     });
 }
 
-// ── Conflict detection ────────────────────────────────────────────────────────
+
 
 function checkConflicts(files, path, callback) {
     const conflicts = [];
@@ -152,7 +161,7 @@ function showConflictModal(files, conflicts, path, callback) {
     modal.addEventListener('click', e => { if (e.target === modal) close('cancel'); });
 }
 
-// ── Upload after conflict resolution ─────────────────────────────────────────
+
 
 function startUpload(resolvedFiles) {
     const progressSection = document.getElementById('progressSection');
@@ -224,24 +233,19 @@ function startUpload(resolvedFiles) {
     }
 }
 
-/**
- * Upload a single file in CHUNK_SIZE chunks with automatic retry.
- * @param {File}     file
- * @param {'overwrite'|'rename'} action
- * @param {Function} onProgress  - called with bytes sent per tick
- * @param {Function} onDone
- * @param {Function} onError
- */
 function uploadFileChunked(file, action, onProgress, onDone, onError) {
     const path      = (typeof currentPath !== 'undefined') ? currentPath : '';
     const totalSize = file.size;
     let offset      = 0;
+    let chunkSize   = pickChunkSize(totalSize, 0);
+    let throughput  = 0;
 
     function sendChunk(retries = 3) {
-        const isFinal   = (offset + CHUNK_SIZE) >= totalSize;
-        const chunk     = file.slice(offset, offset + CHUNK_SIZE);
-        const chunkSize = chunk.size;
+        const isFinal   = (offset + chunkSize) >= totalSize;
+        const chunk     = file.slice(offset, offset + chunkSize);
+        const sent      = chunk.size;
         let bytesSent   = 0;
+        const startedAt = Date.now();
 
         const params = new URLSearchParams({
             filename: file.name,
@@ -263,10 +267,15 @@ function uploadFileChunked(file, action, onProgress, onDone, onError) {
         });
 
         xhr.addEventListener('load', () => {
+            const elapsed = (Date.now() - startedAt) / 1000;
+            if (elapsed > 0 && sent > 0) {
+                throughput = (throughput * 0.6) + ((sent / elapsed) * 0.4);
+                chunkSize = pickChunkSize(totalSize, throughput);
+            }
             if (xhr.status === 200) {
-                const delta = chunkSize - bytesSent;
+                const delta = sent - bytesSent;
                 if (delta > 0) onProgress(delta);
-                offset += chunkSize;
+                offset += sent;
                 if (isFinal) { onDone(); } else { setTimeout(sendChunk, 0); }
             } else {
                 if (retries > 0) setTimeout(() => sendChunk(retries - 1), 2000);
@@ -286,9 +295,9 @@ function uploadFileChunked(file, action, onProgress, onDone, onError) {
     sendChunk();
 }
 
-// ── Scroll-aware upload badge ─────────────────────────────────────────────────
-// When the user scrolls past the upload section, a floating badge shows
-// the current upload status and lets them scroll back up.
+
+
+
 (function () {
     const SCROLL_THRESHOLD = 120;
     let _badge = null;

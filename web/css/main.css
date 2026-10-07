@@ -1,6 +1,3 @@
-// This file is compiled from web/scss/main.scss
-// Do not edit directly.
-/* ===== main.css — shared styles for all pages ===== */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -14,7 +11,6 @@ body {
 
 .container { max-width: 1400px; margin: 0 auto; background: #fff; }
 
-/* ── Header ── */
 .header {
     background: #fff;
     border-bottom: 1px solid #e0e0e0;
@@ -29,7 +25,6 @@ body {
 .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .keyboard-hint { font-size: 11px; color: #999; white-space: nowrap; }
 
-/* ── Buttons ── */
 .btn {
     padding: 8px 16px;
     background: #1a1a1a;
@@ -56,7 +51,6 @@ body {
 }
 .btn-small:hover { background: #fafafa; border-color: #1a1a1a; }
 
-/* ── Upload ── */
 .upload-section {
     padding: 24px 20px;
     border-bottom: 1px solid #e0e0e0;
@@ -90,7 +84,6 @@ body {
 .upload-btn:hover { background: #333; }
 .upload-btn:disabled { background: #ccc; cursor: not-allowed; }
 
-/* ── Progress ── */
 .progress-section {
     padding: 20px; display: none;
     background: #fafafa; border-bottom: 1px solid #e0e0e0;
@@ -99,7 +92,6 @@ body {
 .progress-fill { height: 100%; background: #1a1a1a; width: 0%; transition: width 0.3s; }
 .progress-info { display: flex; justify-content: space-between; margin-top: 10px; font-size: 13px; color: #666; }
 
-/* ── Bulk actions ── */
 .bulk-actions {
     display: none; padding: 14px 20px;
     background: #f5f5f5; border-bottom: 1px solid #e0e0e0;
@@ -107,7 +99,6 @@ body {
 }
 .bulk-actions.active { display: flex; }
 
-/* ── File list ── */
 .files-section { padding: 20px; }
 .file-item {
     display: grid;
@@ -132,7 +123,6 @@ body {
 .file-link { font-size: 11px; color: #0066cc; margin-top: 4px; font-family: monospace; word-break: break-all; cursor: pointer; }
 .file-link:hover { text-decoration: underline; }
 
-/* ── Menu button & context menu ── */
 .file-actions { display: flex; gap: 8px; flex-shrink: 0; position: relative; }
 
 .menu-btn {
@@ -163,7 +153,6 @@ body {
     100% { background-position: -200% center; }
 }
 
-/* bottom progress bar padding so content isn't hidden behind it */
 body.snd-bar-active { padding-bottom: 36px; }
 
 .context-menu {
@@ -181,12 +170,11 @@ body.snd-bar-active { padding-bottom: 36px; }
 }
 .context-menu.show { display: block; }
 .context-menu-item {
-    padding: 14px 16px;   /* taller for touch targets */
+    padding: 14px 16px;   
     cursor: pointer;
     font-size: 13px;
     border-bottom: 1px solid #f0f0f0;
-    /* FIX: prevent text selection and callout on long-press mobile */
-    -webkit-tap-highlight-color: transparent;
+        -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     user-select: none;
     -webkit-user-select: none;
@@ -197,36 +185,29 @@ body.snd-bar-active { padding-bottom: 36px; }
 .context-menu-item.danger { color: #d32f2f; }
 .context-menu-item.danger:hover { background: #ffebee; }
 
-/* ── Misc ── */
 .checkbox { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
 .empty-state { text-align: center; padding: 60px 20px; color: #999; font-size: 14px; }
 
-/* ── Modal ── */
 .modal {
     display: none; position: fixed;
     top: 0; left: 0; width: 100%; height: 100%;
     background: rgba(0,0,0,0.5); z-index: 1000;
-    /* Center modal content vertically + horizontally */
-    align-items: center; justify-content: center;
+        align-items: center; justify-content: center;
     overflow-y: auto;
-    /* padding keeps modal from sticking to edge on small screens */
-    padding: 20px;
+        padding: 20px;
     box-sizing: border-box;
 }
-/* When display is set to block (legacy), switch to flex so centering works */
 .modal[style*="display: block"],
 .modal[style*="display:block"] {
     display: flex !important;
 }
 .modal-content {
     position: relative;
-    /* Remove margin-based centering — flexbox handles it */
-    margin: 0 auto;
+        margin: 0 auto;
     background: white;
     width: 100%; max-width: 900px; max-height: calc(100vh - 40px);
     display: flex; flex-direction: column; border-radius: 8px;
-    /* Prevent clicks on content from closing modal */
-    pointer-events: auto;
+        pointer-events: auto;
 }
 .modal-header {
     padding: 20px 24px; background: #fafafa; border-bottom: 1px solid #e0e0e0;
@@ -245,7 +226,6 @@ body.snd-bar-active { padding-bottom: 36px; }
 }
 .close-btn:hover { color: #1a1a1a; }
 
-/* ── Code / text ── */
 textarea {
     width: 100%; min-height: 300px; padding: 16px;
     border: 1px solid #e0e0e0; border-radius: 4px;
@@ -259,7 +239,6 @@ pre {
     border: 1px solid #e0e0e0; border-radius: 4px;
 }
 
-/* ── Media viewer ── */
 .media-viewer {
     text-align: center; background: #000; position: relative;
     min-height: 300px; display: flex; align-items: center; justify-content: center;
@@ -283,7 +262,6 @@ pre {
     pointer-events: none; white-space: nowrap;
 }
 
-/* ── Toggle switch ── */
 .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
 .toggle-switch input { opacity: 0; width: 0; height: 0; }
 .toggle-slider {
@@ -301,7 +279,6 @@ input:checked + .toggle-slider:before { transform: translateX(20px); }
 .toggle-slider:after { content: 'Private'; position: absolute; right: 8px; top: 4px; font-size: 9px; color: white; font-weight: 500; }
 input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto; }
 
-/* ── Footer ── */
 .footer {
     position: fixed; bottom: 0; left: 0; right: 0;
     background: #fff; border-top: 1px solid #e0e0e0;
@@ -309,7 +286,6 @@ input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto
 }
 .footer strong { color: #1a1a1a; font-weight: 500; }
 
-/* ── Toast ── */
 .toast {
     position: fixed; top: 20px; right: 20px;
     padding: 14px 20px; background: #1a1a1a; color: white;
@@ -320,7 +296,6 @@ input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto
 .toast.error { background: #d32f2f; }
 @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
-/* ── Search ── */
 .search-overlay {
     display: none; position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -343,7 +318,6 @@ input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto
 .search-hint { font-size: 12px; color: #666; margin-top: 8px; text-align: center; }
 .search-highlight { background: #fff9c4 !important; outline: 2px solid #f9a825; }
 
-/* ── Tables ── */
 .zip-entry { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-family: monospace; font-size: 12px; }
 .zip-entry:last-child { border-bottom: none; }
 .props-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -351,7 +325,6 @@ input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto
 .props-table td:first-child { color: #666; width: 38%; white-space: nowrap; }
 .props-table tr:last-child td { border-bottom: none; }
 
-/* ── csa player overrides ── */
 .csa-bar { display: none !important; }
 .csa-progress-fill { background: #e07820 !important; }
 .csa-progress-thumb { background: #e07820 !important; box-shadow: 0 0 10px rgba(224,120,32,.5) !important; }
@@ -360,19 +333,16 @@ input:checked + .toggle-slider:after { content: 'Public'; left: 8px; right: auto
 .csa-btn.csa-active { color: #e07820 !important; }
 .csa-ldr-ring { border-top-color: #e07820 !important; }
 
-/* ── Responsive ── */
 @media (max-width: 768px) {
     .keyboard-hint { display: none; }
     .upload-section, .files-section, .bulk-actions, .progress-section { padding: 16px; }
     .file-item { grid-template-columns: auto 1fr; }
     .file-actions { grid-column: 2; width: 100%; justify-content: flex-end; }
     .modal-content { width: 95%; margin: 20px auto; max-height: calc(100vh - 40px); }
-    /* FIX: ensure context menu stays within viewport on small screens */
-    .context-menu { min-width: 160px; }
-    .context-menu-item { padding: 16px; }  /* extra tall for touch */
+        .context-menu { min-width: 160px; }
+    .context-menu-item { padding: 16px; }  
 }
 
-/* ── Liquid Glass theme ── */
 body.th-liquid .header, body.th-liquid .upload-section, body.th-liquid .files-section,
 body.th-liquid .file-item, body.th-liquid .bulk-actions, body.th-liquid .progress-section,
 body.th-liquid #breadcrumb, body.th-liquid .container, body.th-liquid .card, body.th-liquid .modal-content {
@@ -403,7 +373,25 @@ body.th-liquid .context-menu-item { color: rgba(255,255,255,0.8) !important; }
 body.th-liquid .context-menu-item:hover { background: rgba(255,255,255,0.12) !important; }
 body.th-liquid:not(.th-rainbow):not(.th-dark) { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%) !important; }
 
-/* ── Dark theme ── */
 body.th-dark .file-item { background: #181818 !important; border-color: #2a2a2a !important; }
 body.th-dark .header { background: #111 !important; border-color: #2a2a2a !important; }
 body.th-dark input, body.th-dark select { background: #111 !important; border-color: #333 !important; color: #ddd !important; }
+
+.ddos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.ddos-chart-card { border: 1px solid #e0e0e0; border-radius: 4px; padding: 16px; margin-top: 16px; }
+.ddos-chart-card h4 { margin-bottom: 12px; font-size: 14px; font-weight: 500; }
+.ddos-chart-card canvas { width: 100%; height: 200px; cursor: crosshair; }
+.ddos-chart-legend { margin-top: 10px; font-size: 11px; color: #666; }
+
+#sndChallengeOverlay { z-index: 100000; background: rgba(0, 0, 0, 0.55); }
+#sndChallengeOverlay .modal-content { max-width: 420px; }
+#sndChallengeOverlay .modal-body { padding: 24px; }
+#sndChallengeOverlay .empty-state { padding: 24px; font-size: 13px; }
+
+#tipsCard { margin-top: 16px; }
+#tipsCard .code-block { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; font-family: 'SF Mono', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+
+@media (max-width: 768px) {
+    .ddos-grid { grid-template-columns: 1fr; }
+    .ddos-chart-card { padding: 12px; }
+}

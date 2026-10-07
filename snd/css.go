@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// HandleCSSFile serves static files from web/css/ using WorkDir for absolute path.
 func HandleCSSFile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/css/")
 	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {

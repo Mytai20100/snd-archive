@@ -14,12 +14,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Footer + custom CSS
 	userFooterHTML := ""
 	userCustomCSSTag := ""
 	snd.SiteSettingsMu.RLock()
 	hideFooter := snd.SiteSettingsData.HideFooter
-	customCSS  := snd.SiteSettingsData.CustomCSS
+	customCSS := snd.SiteSettingsData.CustomCSS
 	snd.SiteSettingsMu.RUnlock()
 	if !hideFooter {
 		userFooterHTML = `<div class="footer"><strong>` + snd.Cfg.SiteName + `</strong> — ` + user.Username + ` — v` + snd.VERSION + `</div>`
@@ -55,7 +54,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     ` + snd.EmbedLoaderSnippet() + `
     <link rel="stylesheet" href="/css/main.css">
     <style>
-        /* userdash extras: liquid glass with dark theme support */
         body.th-liquid .header, body.th-liquid .upload-section, body.th-liquid .files-section,
         body.th-liquid .file-item, body.th-liquid .bulk-actions, body.th-liquid .progress-section,
         body.th-liquid #breadcrumb, body.th-liquid .container, body.th-liquid .card, body.th-liquid .modal-content {
@@ -83,7 +81,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         body.th-dark input, body.th-dark select { background: #111 !important; border-color: #333 !important; color: #ddd !important; }
     </style>
     <script>
-        /* Early shim so openDownloadURLModal() is safe before userdash.js loads */
         window._dlUrlPending = false;
         window.openDownloadURLModal = function() { window._dlUrlPending = true; };
     </script>
@@ -104,7 +101,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 <span class="keyboard-hint">Ctrl+F: Search | Ctrl+A: Select All</span>
                 <button class="btn" onclick="openCreateFolderModal()" data-i18n="nav_new_folder">New Folder</button>
                 <button class="btn" onclick="openDownloadURLModal()" title="Download file from URL" data-i18n="nav_download_url">Download URL</button>
-                <button class="btn" onclick="openSettingsPanel()" title="Settings" style="padding:6px 10px;" data-i18n="nav_settings">⚙ Settings</button>
                 <a href="/ad" class="btn" data-i18n="nav_my_account">My Account</a>
                 <a href="/logout" class="btn" style="background:#c62828;" data-i18n="nav_logout">Logout</a>
             </div>
@@ -144,7 +140,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- View Modal -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -155,7 +150,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Edit Modal -->
     <div class="modal" id="editModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -170,7 +164,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Rename Modal -->
     <div class="modal" id="renameModal">
         <div class="modal-content" style="max-width:500px;">
             <div class="modal-header">
@@ -187,7 +180,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Properties Modal -->
     <div class="modal" id="propsModal">
         <div class="modal-content" style="max-width:480px;">
             <div class="modal-header">
@@ -201,7 +193,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Create Folder Modal -->
     <div class="modal" id="createFolderModal">
         <div class="modal-content" style="max-width:500px;">
             <div class="modal-header">
@@ -219,7 +210,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Download URL Modal -->
     <div class="modal" id="downloadURLModal">
         <div class="modal-content" id="dlModalContent" style="max-width:560px;transition:max-width 0.25s ease;">
             <div class="modal-header">
@@ -227,7 +217,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                 <button class="close-btn" onclick="closeModal('downloadURLModal')">&times;</button>
             </div>
             <div class="modal-body">
-                <!-- URL input row -->
                 <div style="display:flex;gap:8px;margin-bottom:10px;">
                     <input type="url" id="dlUrlInput" placeholder="https://youtube.com/watch?v=... or any URL"
                            style="flex:1;padding:10px;border:1px solid #e0e0e0;font-size:13px;border-radius:4px;box-sizing:border-box;"
@@ -236,9 +225,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     <button class="btn-small" id="dlUrlBtn" onclick="_dlHandleEnter()" style="white-space:nowrap;min-width:90px;">Fetch Info</button>
                 </div>
 
-                <!-- Streaming platform detected panel -->
                 <div id="dlStreamPanel" style="display:none;">
-                    <!-- Video preview -->
                     <div id="dlVideoPreview" style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;padding:10px;background:#f8f9fa;border-radius:6px;border:1px solid #e8e8e8;">
                         <img id="dlThumb" src="" alt="" style="width:120px;height:68px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#ddd;">
                         <div style="flex:1;min-width:0;">
@@ -247,24 +234,20 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         </div>
                     </div>
 
-                    <!-- Format tabs -->
                     <div style="display:flex;gap:0;border-bottom:2px solid #e0e0e0;margin-bottom:12px;">
                         <button id="dlTabVideo" class="dl-tab dl-tab-active" onclick="_dlSwitchTab('video')">Video</button>
                         <button id="dlTabAudio" class="dl-tab" onclick="_dlSwitchTab('audio')">Audio Only</button>
                         <button id="dlTabDirect" class="dl-tab" onclick="_dlSwitchTab('direct')">Direct</button>
                     </div>
 
-                    <!-- Video tab -->
                     <div id="dlPanelVideo">
                         <label style="font-size:12px;color:#555;display:block;margin-bottom:4px;">Quality</label>
                         <select id="dlVideoSelect" style="width:100%;padding:8px;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;margin-bottom:10px;"></select>
                     </div>
-                    <!-- Audio tab -->
                     <div id="dlPanelAudio" style="display:none;">
                         <label style="font-size:12px;color:#555;display:block;margin-bottom:4px;">Format</label>
                         <select id="dlAudioSelect" style="width:100%;padding:8px;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;margin-bottom:10px;"></select>
                     </div>
-                    <!-- Direct tab -->
                     <div id="dlPanelDirect" style="display:none;">
                         <p style="font-size:12px;color:#666;margin:0 0 10px;">Download using the direct HTTP fetch (no yt-dlp). Works for plain file URLs.</p>
                     </div>
@@ -272,10 +255,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     <button class="btn-small" id="dlStreamBtn" onclick="_dlStreamDownload()" style="width:100%;padding:10px;font-size:13px;">⬇ Download</button>
                 </div>
 
-                <!-- Regular URL panel (shown for non-streaming URLs) -->
                 <div id="dlDirectDesc" style="font-size:13px;color:#666;margin-bottom:8px;" data-i18n="download_url_desc">Server will fetch the file from this URL and save it to the current folder.</div>
 
-                <!-- Queue -->
                 <div id="dlUrlQueue" style="display:none;margin-top:14px;border-top:1px solid #f0f0f0;padding-top:4px;max-height:200px;overflow-y:auto;"></div>
 
                 <style>
@@ -294,7 +275,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Settings Modal -->
     <div class="modal" id="settingsModal" style="display:none;">
         <div class="modal-content" style="max-width:520px;">
             <div class="modal-header">
@@ -332,30 +312,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     <span class="info-label">Show Direct Links</span>
                     <label class="toggle-switch"><input type="checkbox" id="us-direct-links"><span class="toggle-slider"></span></label>
                 </div>
-
-                <!-- MCP Server (shown only when admin allows) -->
-                <div id="us-mcp-section" style="display:none;margin-top:20px;padding-top:16px;border-top:1px solid #e0e0e0;">
-                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:8px;">MCP Server (AI Agent)</div>
-                    <div style="font-size:11px;color:#aaa;margin-bottom:12px;">Let an AI agent manage your files using your API token. Never uses admin access.</div>
-                    <div class="info-row">
-                        <span class="info-label">Enable my MCP</span>
-                        <label class="toggle-switch"><input type="checkbox" id="us-mcp-enabled"><span class="toggle-slider"></span></label>
-                    </div>
-                    <div id="us-mcp-perms" style="display:none;padding:10px 0 4px;">
-                        <div style="font-size:11px;color:#888;margin-bottom:8px;">Allowed operations (grey = blocked by admin):</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:8px 20px;">
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-read"> Read &amp; list</label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-upload"> Upload</label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-create"> Create folder</label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-rename"> Rename</label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span></label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="us-mcp-perm-storage"> Storage info</label>
-                        </div>
-                        <div style="font-size:11px;color:#aaa;margin-top:8px;">
-                            Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-small" onclick="closeSettingsModal()">Cancel</button>
@@ -371,6 +327,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <script src="/lib/upload.js" defer></script>
     <script src="/lib/userdash.js" defer></script>
     <script src="/lib/qr.js" defer></script>
+    <script src="/lib/challenge.js" defer></script>
     <script>
         const USER_UUID  = '` + user.UUID + `';
         const USER_TOKEN = '` + user.APIToken + `';
@@ -388,9 +345,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
         document.addEventListener('DOMContentLoaded', function() {
             initUpload();
-            // Flush any early click on Download URL button
             if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
-            // Load settings first then files
             fetch('/user/settings').then(r => r.json()).then(data => {
                 const s = data.settings || data;
                 _showDirectLinks = s.show_direct_links !== false;

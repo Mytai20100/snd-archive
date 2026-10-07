@@ -14,8 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ─── Persistence ────────────────────────────────────────────────────────────
-
 func LoadUsers() {
 	data, err := os.ReadFile(UsersFile)
 	if err != nil {
@@ -44,8 +42,6 @@ func SaveUsers() {
 	os.WriteFile(UsersFile, data, 0600)
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
 func NewUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -62,17 +58,14 @@ func CheckPassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
-// UserPublicDir returns the filesystem path for a user's public directory.
 func UserPublicDir(uuid string) string {
 	return filepath.Join(PublicDir, uuid)
 }
 
-// EnsureUserDir creates the per-user public directory if it doesn't exist.
 func EnsureUserDir(uuid string) error {
 	return os.MkdirAll(UserPublicDir(uuid), 0755)
 }
 
-// CalcUserStorage walks the user's dir and returns total bytes used.
 func CalcUserStorage(uuid string) int64 {
 	var total int64
 	filepath.WalkDir(UserPublicDir(uuid), func(_ string, d fs.DirEntry, err error) error {
@@ -88,14 +81,12 @@ func CalcUserStorage(uuid string) int64 {
 	return total
 }
 
-// GetUserByUUID returns a user by UUID (nil if not found).
 func GetUserByUUID(uuid string) *UserAccount {
 	UsersMu.RLock()
 	defer UsersMu.RUnlock()
 	return Users[uuid]
 }
 
-// GetUserByUsername finds a user by username (nil if not found).
 func GetUserByUsername(username string) *UserAccount {
 	UsersMu.RLock()
 	defer UsersMu.RUnlock()
@@ -107,7 +98,6 @@ func GetUserByUsername(username string) *UserAccount {
 	return nil
 }
 
-// GetUserByToken finds a user by API token (nil if not found).
 func GetUserByToken(token string) *UserAccount {
 	if token == "" {
 		return nil
@@ -115,24 +105,20 @@ func GetUserByToken(token string) *UserAccount {
 	UsersMu.RLock()
 	defer UsersMu.RUnlock()
 	for _, u := range Users {
-		if u.APIToken == token && u.IsActive {
+		if u.APIToken == "" || !u.IsActive {
+			continue
+		}
+		if tokenEqual(token, u.APIToken) {
 			return u
 		}
 	}
 	return nil
 }
 
-// ─── HTTP Handlers ───────────────────────────────────────────────────────────
-
-// HandleListUsers → GET /admin/users  (admin only)
 func HandleListUsers(w http.ResponseWriter, r *http.Request) {
-	// M2 FIX: Only the true admin (no UserUUID) may see API tokens in the list.
-	// Sub-users with IsAdmin=true get a redacted placeholder.
 	callerSession := GetSessionInfo(r)
 	callerIsTrueAdmin := callerSession != nil && callerSession.IsAdmin && callerSession.UserUUID == ""
 
-	// Snapshot the user list under a short read-lock, then release before
-	// doing any filesystem work so we never drop/re-acquire the lock mid-range.
 	UsersMu.RLock()
 	snapshot := make([]*UserAccount, 0, len(Users))
 	for _, u := range Users {
@@ -142,7 +128,6 @@ func HandleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	list := make([]map[string]interface{}, 0, len(snapshot))
 	for _, u := range snapshot {
-		// CalcUserStorage reads the filesystem – do it outside any lock.
 		used := CalcUserStorage(u.UUID)
 		UsersMu.Lock()
 		u.UsedStorage = used
@@ -159,7 +144,7 @@ func HandleListUsers(w http.ResponseWriter, r *http.Request) {
 			"email":         u.Email,
 			"api_token":     tokenValue,
 			"storage_limit": u.StorageLimit,
-			"used_storage":  used, // use local var, not u.UsedStorage (avoid stale read)
+			"used_storage":  used,
 			"request_count": u.RequestCount,
 			"created_at":    u.CreatedAt.Format("2006-01-02 15:04:05"),
 			"is_active":     u.IsActive,
@@ -171,13 +156,12 @@ func HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-// HandleCreateUser → POST /admin/users/create  (admin only)
 func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username     string `json:"username"`
 		Email        string `json:"email"`
 		Password     string `json:"password"`
-		StorageLimit int64  `json:"storage_limit"` // bytes; -1 unlimited
+		StorageLimit int64  `json:"storage_limit"`
 		IsAdmin      bool   `json:"is_admin"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Password == "" {
@@ -185,7 +169,6 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Duplicate check
 	if existing := GetUserByUsername(req.Username); existing != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Username already exists"})
@@ -201,7 +184,7 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	uuid := NewUUID()
 	storageLimit := req.StorageLimit
 	if storageLimit == 0 {
-		storageLimit = -1 // default: unlimited
+		storageLimit = -1
 	}
 
 	user := &UserAccount{
@@ -235,13 +218,12 @@ func HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleUpdateUser → POST /admin/users/update  (admin only)
 func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UUID         string `json:"uuid"`
 		Username     string `json:"username"`
 		Email        string `json:"email"`
-		Password     string `json:"password"` // empty = no change
+		Password     string `json:"password"`
 		StorageLimit int64  `json:"storage_limit"`
 		IsActive     bool   `json:"is_active"`
 		IsAdmin      bool   `json:"is_admin"`
@@ -291,7 +273,6 @@ func HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// HandleDeleteUser → POST /admin/users/delete  (admin only)
 func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UUID        string `json:"uuid"`
@@ -316,7 +297,6 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		os.RemoveAll(UserPublicDir(req.UUID))
 	}
 
-	// Kick any active sessions for this user
 	SessionMu.Lock()
 	for sid, s := range Sessions {
 		if s.UserUUID == req.UUID {
@@ -331,9 +311,6 @@ func HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// HandleUserPublicRaw serves a file from a user's public directory.
-// URL: /raw/<filename>?u=<uuid>[&token=<usertoken>]
-// or:  /<filename>?u=<uuid>[&token=<usertoken>]
 func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 	uuid := r.URL.Query().Get("u")
 	if uuid == "" {
@@ -347,12 +324,9 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine file path
 	var relPath string
 	if p := r.URL.Path; len(p) > 1 {
-		// strip leading /
 		relPath = p[1:]
-		// strip raw/ prefix if present
 		if len(relPath) > 4 && relPath[:4] == "raw/" {
 			relPath = relPath[4:]
 		}
@@ -362,7 +336,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize path
 	if filepath.IsAbs(relPath) || containsDotDot(relPath) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
@@ -370,7 +343,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 
 	filePath := filepath.Join(UserPublicDir(uuid), relPath)
 
-	// Check if it's a public file or valid token
 	fileName := filepath.Base(relPath)
 	folderRel := filepath.Dir(relPath)
 	if folderRel == "." {
@@ -378,7 +350,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	PermissionMu.RLock()
-	// Keys for user-scoped permissions use uuid/path
 	userFileKey := uuid + "/" + relPath
 	userFolderKey := uuid + "/" + folderRel
 	filePerm, filePublic := FilePermissions[userFileKey]
@@ -388,8 +359,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 	isPublic := (filePublic && filePerm.IsPublic) || (folderPublic && folderPerm.IsPublic)
 
 	if isPublic {
-		// Public file: accessible without token. If a pt= token is provided, validate
-		// it as an extra check, but a missing pt= is not a reason to block access.
 		pt := r.URL.Query().Get("pt")
 		if pt != "" {
 			fileHasToken := filePublic && filePerm.IsPublic && filePerm.PublicToken != ""
@@ -399,7 +368,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 				ptOK := (fileHasToken && tokenEqual(pt, filePerm.PublicToken)) ||
 					(folderHasToken && tokenEqual(pt, folderPerm.PublicToken))
 				if !ptOK {
-					// Wrong token provided explicitly — reject
 					token := r.URL.Query().Get("token")
 					if token == "" {
 						token = r.Header.Get("X-API-Token")
@@ -415,9 +383,7 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// No pt= provided → allow freely (file is public)
 	} else {
-		// Private file: require API token or session
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			token = r.Header.Get("X-API-Token")
@@ -425,7 +391,6 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 		tokenOK := token == user.APIToken || token == Cfg.APIToken
 
 		if !tokenOK {
-			// Check session: must be THIS user's session (or admin session)
 			session := getValidSession(r)
 			if session == nil || (!session.IsAdmin && session.UserUUID != uuid) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -434,13 +399,11 @@ func HandleUserPublicFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Count request
 	UsersMu.Lock()
 	user.RequestCount++
 	UsersMu.Unlock()
 	go SaveUsers()
 
-	// Serve the file
 	f, err := os.Open(filePath)
 	if err != nil {
 		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
@@ -463,7 +426,6 @@ func containsDotDot(path string) bool {
 			return true
 		}
 	}
-	// Also check raw string
 	for i := 0; i < len(path)-1; i++ {
 		if path[i] == '.' && path[i+1] == '.' {
 			return true
@@ -493,20 +455,15 @@ func getContentTypeForType(fileType, ext string) string {
 		case ".tif", ".tiff":
 			return "image/tiff"
 		default:
-			// .jpg .jpeg .jfif .jpe and others → jpeg
 			return "image/jpeg"
 		}
 	case "video", "audio":
-		// ext is already the extension like ".mp4", wrap as filename
 		return getMediaContentType("file" + ext)
 	default:
 		return "application/octet-stream"
 	}
 }
 
-// HandleChangePassword allows a logged-in sub-user to change their own password.
-// POST /user/change-password
-// Body JSON: { "current_password": "...", "new_password": "..." }
 func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -542,7 +499,6 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-fetch from DB to get current hash (user pointer might be stale)
 	UsersMu.RLock()
 	u, exists := Users[user.UUID]
 	UsersMu.RUnlock()

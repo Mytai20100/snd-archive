@@ -1,4 +1,4 @@
-// Variables 
+
 $color-fg:        #1a1a1a;
 $color-bg:        #fafafa;
 $color-white:     #fff;
@@ -28,14 +28,14 @@ $shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.3);
 
 $breakpoint-mobile: 768px;
 
-// Reset
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-// Base
+
 body {
   font-family: $font-system;
   background: $color-bg;
@@ -49,12 +49,12 @@ body {
 }
 
 .container {
-  max-width: 1000px;
+  max-width: 1400px;
   margin: 0 auto;
   background: $color-white;
 }
 
-// Animations
+
 @keyframes sndShimmer {
   0%   { background-position: 200% center; }
   100% { background-position: -200% center; }
@@ -65,7 +65,7 @@ body {
   to   { transform: translateX(0);     opacity: 1; }
 }
 
-// Header
+
 .header {
   background: $color-white;
   border-bottom: 1px solid $color-border;
@@ -95,7 +95,7 @@ body {
   white-space: nowrap;
 }
 
-// Buttons
+
 .btn {
   padding: 8px 16px;
   background: $color-fg;
@@ -129,7 +129,7 @@ body {
   }
 }
 
-// Upload
+
 .upload-section {
   padding: 24px 20px;
   border-bottom: 1px solid $color-border;
@@ -195,7 +195,7 @@ body {
   &:disabled { background: #ccc; cursor: not-allowed; }
 }
 
-// Progress
+
 .progress-section {
   padding: 20px;
   display: none;
@@ -224,7 +224,7 @@ body {
   color: $color-muted;
 }
 
-// Bulk actions
+
 .bulk-actions {
   display: none;
   padding: 14px 20px;
@@ -239,7 +239,7 @@ body {
   }
 }
 
-// File list
+
 .files-section {
   padding: 20px;
 }
@@ -299,7 +299,7 @@ body {
   font-size: 11px;
   color: $color-accent;
   margin-top: 4px;
-  font-family: $font-mono;
+  font-family: monospace;
   word-break: break-all;
   cursor: pointer;
 
@@ -308,7 +308,7 @@ body {
   }
 }
 
-// Menu button & context menu
+
 .file-actions {
   display: flex;
   gap: 8px;
@@ -379,7 +379,7 @@ body {
   }
 }
 
-// Misc
+
 .checkbox {
   width: 18px;
   height: 18px;
@@ -394,7 +394,7 @@ body {
   font-size: 14px;
 }
 
-// Modal
+
 .modal {
   display: none;
   position: fixed;
@@ -404,19 +404,29 @@ body {
   height: 100%;
   background: rgba(0, 0, 0, 0.5);
   z-index: 1000;
+  align-items: center;
+  justify-content: center;
   overflow-y: auto;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.modal[style*="display: block"],
+.modal[style*="display:block"] {
+  display: flex !important;
 }
 
 .modal-content {
   position: relative;
-  margin: 40px auto;
+  margin: 0 auto;
   background: $color-white;
-  width: 90%;
+  width: 100%;
   max-width: 900px;
-  max-height: calc(100vh - 80px);
+  max-height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
   border-radius: $radius-lg;
+  pointer-events: auto;
 }
 
 .modal-header {
@@ -470,7 +480,7 @@ body {
   }
 }
 
-// Code / text
+
 textarea {
   width: 100%;
   min-height: 300px;
@@ -501,7 +511,7 @@ pre {
   border-radius: $radius-sm;
 }
 
-// Media viewer
+
 .media-viewer {
   text-align: center;
   background: #000;
@@ -559,7 +569,7 @@ pre {
   white-space: nowrap;
 }
 
-// Toggle switch
+
 .toggle-switch {
   position: relative;
   display: inline-block;
@@ -578,6 +588,13 @@ pre {
       &::after  { content: 'Public'; left: 8px; right: auto; }
     }
   }
+}
+
+input:checked + .toggle-slider {
+  background: $color-toggle-on;
+
+  &::before { transform: translateX(20px); }
+  &::after  { content: 'Public'; left: 8px; right: auto; }
 }
 
 .toggle-slider {
@@ -611,7 +628,7 @@ pre {
   }
 }
 
-// Footer
+
 .footer {
   position: fixed;
   bottom: 0;
@@ -631,7 +648,7 @@ pre {
   }
 }
 
-// Toast
+
 .toast {
   position: fixed;
   top: 20px;
@@ -649,7 +666,7 @@ pre {
   &.error   { background: $color-error; }
 }
 
-// Search
+
 .search-overlay {
   display: none;
   position: fixed;
@@ -712,11 +729,11 @@ pre {
   outline: 2px solid #f9a825;
 }
 
-// Tables
+
 .zip-entry {
   padding: 8px 12px;
   border-bottom: 1px solid $color-border-lt;
-  font-family: $font-mono;
+  font-family: monospace;
   font-size: 12px;
 
   &:last-child {
@@ -746,7 +763,7 @@ pre {
   }
 }
 
-// CSA player overrides
+
 .csa-bar              { display: none !important; }
 .csa-progress-fill    { background: $color-csa !important; }
 .csa-progress-thumb   { background: $color-csa !important; box-shadow: 0 0 10px rgba(224, 120, 32, 0.5) !important; }
@@ -755,7 +772,7 @@ pre {
 .csa-btn.csa-active   { color: $color-csa !important; }
 .csa-ldr-ring         { border-top-color: $color-csa !important; }
 
-// Responsive
+
 @media (max-width: $breakpoint-mobile) {
   .keyboard-hint {
     display: none;
@@ -793,7 +810,7 @@ pre {
   }
 }
 
-// Liquid Glass theme
+
 body.th-liquid {
   &:not(.th-rainbow):not(.th-dark) {
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%) !important;
@@ -867,7 +884,7 @@ body.th-liquid {
   }
 }
 
-// Dark theme
+
 body.th-dark {
   .file-item {
     background: #181818 !important;
@@ -884,5 +901,82 @@ body.th-dark {
     background: #111 !important;
     border-color: #333 !important;
     color: #ddd !important;
+  }
+}
+
+
+.ddos-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.ddos-chart-card {
+  border: 1px solid $color-border;
+  border-radius: $radius-sm;
+  padding: 16px;
+  margin-top: 16px;
+
+  h4 {
+    margin-bottom: 12px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  canvas {
+    width: 100%;
+    height: 200px;
+    cursor: crosshair;
+  }
+}
+
+.ddos-chart-legend {
+  margin-top: 10px;
+  font-size: 11px;
+  color: $color-muted;
+}
+
+#sndChallengeOverlay {
+  z-index: 100000;
+  background: rgba(0, 0, 0, 0.55);
+
+  .modal-content {
+    max-width: 420px;
+  }
+
+  .modal-body {
+    padding: 24px;
+  }
+
+  .empty-state {
+    padding: 24px;
+    font-size: 13px;
+  }
+}
+
+#tipsCard {
+  margin-top: 16px;
+
+  .code-block {
+    background: #f5f5f5;
+    padding: 12px;
+    border-radius: $radius-sm;
+    overflow-x: auto;
+    font-family: $font-mono;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}
+
+@media (max-width: $breakpoint-mobile) {
+  .ddos-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ddos-chart-card {
+    padding: 12px;
   }
 }

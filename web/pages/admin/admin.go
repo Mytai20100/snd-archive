@@ -9,7 +9,6 @@ import (
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	// Sub-user without admin flag → show their own account info panel at /ad
 	if user := snd.GetSessionUser(r); user != nil && !user.IsAdmin {
 		renderUserInfoPage(w, r, user)
 		return
@@ -46,7 +45,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .stat-value { font-size: 32px; font-weight: 500; }
         .card { background: white; padding: 24px; border: 1px solid #e0e0e0; margin-bottom: 16px; border-radius: 4px; }
         .card h2 { font-size: 18px; font-weight: 500; margin-bottom: 16px; }
-        .info-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .info-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
         .info-row:last-child { border-bottom: none; }
         .info-label { color: #666; }
         .info-value { font-weight: 500; }
@@ -54,6 +53,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         .bench-btn { width: 100%; padding: 12px; background: white; border: 1px solid #e0e0e0; cursor: pointer; font-size: 14px; text-align: left; border-radius: 4px; }
         .bench-btn:hover { background: #f5f5f5; }
         .bench-results { margin-top: 16px; padding: 16px; background: #f5f5f5; border: 1px solid #e0e0e0; font-family: monospace; font-size: 13px; white-space: pre-wrap; display: none; border-radius: 4px; }
+        .ddos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+        .ddos-chart-card { border: 1px solid #e0e0e0; border-radius: 4px; padding: 16px; margin-top: 16px; }
+        .ddos-chart-card h4 { margin-bottom: 12px; font-size: 14px; font-weight: 500; }
+        .ddos-chart-card canvas { width: 100%; height: 200px; cursor: crosshair; }
+        .ddos-chart-legend { margin-top: 10px; font-size: 11px; color: #666; }
+        @media (max-width: 768px) {
+            .ddos-grid { grid-template-columns: 1fr; }
+            .ddos-chart-card { padding: 12px; }
+        }
         .session-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; border-bottom: 1px solid #f0f0f0; }
         .session-item:last-child { border-bottom: none; }
         .session-info { flex: 1; }
@@ -80,7 +88,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         input:checked + .toggle-slider:before { transform: translateX(20px); }
         @media (max-width: 768px) { .container { padding: 20px 16px; } .header { flex-wrap: wrap; gap: 12px; } .stat-value { font-size: 26px; } }
 
-        /* Liquid Glass overrides for admin */
         body.th-liquid .card, body.th-liquid .stat-card {
             background: rgba(255,255,255,0.08) !important;
             backdrop-filter: blur(24px) saturate(180%) !important;
@@ -135,7 +142,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</div>
         </div>
 
-        <!-- System Tab -->
         <div id="tab-system" class="tab-content active" style="margin-top:16px;">
             <div class="info-row"><span class="info-label">OS</span><span class="info-value">` + runtime.GOOS + `</span></div>
             <div class="info-row"><span class="info-label">Architecture</span><span class="info-value">` + runtime.GOARCH + `</span></div>
@@ -147,7 +153,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div class="info-row"><span class="info-label">Version</span><span class="info-value">` + snd.VERSION + `</span></div>
         </div>
 
-        <!-- Users Tab -->
         <div id="tab-users" class="tab-content" style="margin-top:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                 <h3 style="font-size:15px;font-weight:500;">User Accounts</h3>
@@ -161,22 +166,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
-        <!-- Sessions Tab -->
         <div id="tab-sessions" class="tab-content" style="margin-top:16px;">
             <div class="sessions-list" id="sessionsList">Loading sessions...</div>
         </div>
 
-        <!-- Logs Tab -->
         <div id="tab-logs" class="tab-content" style="margin-top:16px;">
             <div class="logs-wrapper">
                 <table class="logs-table">
-                    <thead><tr><th>Time</th><th>IP</th><th>Action</th><th>Path</th></tr></thead>
-                    <tbody id="logsTableBody"><tr><td colspan="4" style="padding:16px;color:#999;">Loading...</td></tr></tbody>
+                    <thead><tr><th>Time</th><th>IP</th><th>WebRTC IP</th><th>Action</th><th>Path</th></tr></thead>
+                    <tbody id="logsTableBody"><tr><td colspan="5" style="padding:16px;color:#999;">Loading...</td></tr></tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Benchmark Tab -->
         <div id="tab-benchmark" class="tab-content" style="margin-top:16px;">
             <div class="bench-grid">
                 <button class="bench-btn" onclick="runPingTest()">▶ Test Ping</button>
@@ -189,7 +191,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div class="bench-results" id="benchmarkResults"></div>
         </div>
 
-        <!-- Storage Nodes Tab -->
         <div id="tab-nodes" class="tab-content" style="margin-top:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                 <h3 style="font-size:15px;font-weight:500;">Storage Node Management</h3>
@@ -198,12 +199,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div id="nodesContainer"><div style="color:#999;padding:16px;">Loading...</div></div>
         </div>
 
-        <!-- Anti-DDoS Tab -->
         <div id="tab-ddos" class="tab-content" style="margin-top:16px;">
             <div id="ddosContent"><div style="color:#999;padding:16px;">Loading...</div></div>
         </div>
 
-        <!-- Security Log Tab -->
         <div id="tab-seclog" class="tab-content" style="margin-top:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
                 <div>
@@ -218,6 +217,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                         <option value="ddos_ban">DDoS bans</option>
                         <option value="ddos_block">DDoS blocks</option>
                         <option value="archive_bomb">Archive bombs</option>
+                        <option value="challenge_fail">Challenge failures</option>
+                        <option value="api_key_fail">API key failures</option>
                     </select>
                     <button class="btn" onclick="loadSecurityLogs()" style="padding:6px 14px;font-size:13px;">↺ Refresh</button>
                 </div>
@@ -239,7 +240,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
-        <!-- Allowlist Tab -->
         <div id="tab-allowlist" class="tab-content" style="margin-top:16px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
                 <div>
@@ -251,7 +251,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             <div id="allowlistContainer"><div style="color:#999;padding:16px;">Loading...</div></div>
         </div>
 
-        <!-- Settings Tab -->
         <div id="tab-settings" class="tab-content" style="margin-top:16px;">
             <div id="adminSettingsContent">
                 <div class="info-row">
@@ -298,6 +297,55 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     <textarea id="as-custom-css" rows="6" placeholder="/* your custom CSS here */" style="padding:8px 10px;border:1px solid #d0d0d0;border-radius:4px;width:340px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
                 </div>
                 <div style="margin-top:4px;padding-left:0;">
+                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:10px;margin-top:16px;">Browser Challenge</div>
+                    <div class="info-row">
+                        <span class="info-label">Enable Challenge</span>
+                        <label class="toggle-switch"><input type="checkbox" id="as-challenge-enabled"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div style="font-size:11px;color:#aaa;margin:-6px 0 10px 0;padding-left:0;">Visitors must pass a Cloudflare Turnstile check before browsing. Takes effect immediately.</div>
+                    <div class="info-row">
+                        <span class="info-label">Turnstile Site Key</span>
+                        <input type="text" id="as-turnstile-site" placeholder="0x..." style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:300px;">
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Turnstile Secret Key</span>
+                        <input type="text" id="as-turnstile-secret" placeholder="Leave empty to keep current" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:300px;">
+                    </div>
+                    <div style="font-size:11px;color:#aaa;margin:-6px 0 10px 0;padding-left:0;" id="as-turnstile-secret-state"></div>
+                    <div class="info-row">
+                        <span class="info-label">Widget Theme</span>
+                        <select id="as-challenge-theme" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;">
+                            <option value="auto">Auto</option>
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                        </select>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Widget Appearance</span>
+                        <select id="as-challenge-appearance" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;">
+                            <option value="always">Always</option>
+                            <option value="interaction-only">Interaction only</option>
+                        </select>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Trust Duration (min)</span>
+                        <input type="number" id="as-challenge-ttl" value="1440" min="1" max="43200" style="width:100px;padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;">
+                    </div>
+                </div>
+                <div style="margin-top:4px;padding-left:0;">
+                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:10px;margin-top:16px;">Reverse Proxy</div>
+                    <div class="info-row" style="align-items:flex-start;">
+                        <span class="info-label" style="padding-top:6px;">Trusted Proxies</span>
+                        <textarea id="as-trusted-proxies" rows="3" placeholder="127.0.0.1/32, 10.0.0.0/8" style="padding:8px 10px;border:1px solid #d0d0d0;border-radius:4px;width:340px;font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+                    </div>
+                    <div style="font-size:11px;color:#aaa;margin:-6px 0 10px 0;padding-left:0;">One IP or CIDR per line. Only requests coming from these addresses may set X-Forwarded-For, CF-Connecting-IP or X-Real-IP.</div>
+                    <div class="info-row">
+                        <span class="info-label">Public Base URL</span>
+                        <input type="text" id="as-public-base-url" placeholder="https://files.example.com" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:4px;width:300px;">
+                    </div>
+                    <div style="font-size:11px;color:#aaa;margin:-6px 0 10px 0;padding-left:0;">Used to build absolute links in share previews. Leave empty to derive them from the request.</div>
+                </div>
+                <div style="margin-top:4px;padding-left:0;">
                     <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:10px;margin-top:16px;">Embed / OG Meta (share page)</div>
                     <div class="info-row">
                         <span class="info-label">Embed Loader (CSA.js)</span>
@@ -318,90 +366,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                     </div>
                 </div>
 
-                <!-- ── MCP Server ───────────────────────────────────────────── -->
-                <div style="margin-top:24px;padding-top:20px;border-top:1px solid #e0e0e0;">
-                    <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:12px;">MCP Server (AI Agent API)</div>
-                    <div style="font-size:11px;color:#aaa;margin-bottom:14px;">
-                        Allow AI agents (Claude, GPT, etc.) to manage files via the Model Context Protocol.<br>
-                        Admin MCP uses the server API token. User MCP uses each user's own token — fully isolated.
-                    </div>
-
-                    <div style="font-size:11px;color:#666;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Admin MCP</div>
-                    <div class="info-row">
-                        <span class="info-label">Enable Admin MCP</span>
-                        <label class="toggle-switch"><input type="checkbox" id="mcp-admin-enabled"><span class="toggle-slider"></span></label>
-                    </div>
-                    <div id="mcp-admin-details" style="display:none;margin-left:0;padding:12px 0 4px 0;">
-                        <div class="info-row" style="margin-bottom:6px;">
-                            <span class="info-label" style="font-size:12px;color:#888;">Rate limit (calls/min)</span>
-                            <input type="number" id="mcp-admin-ratelimit" value="60" min="1" max="600" style="width:80px;padding:5px 8px;border:1px solid #d0d0d0;border-radius:4px;font-size:13px;">
-                        </div>
-                        <div style="font-size:11px;color:#888;margin-bottom:10px;">Permissions (what AI agent can do as admin):</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:10px 24px;margin-bottom:8px;">
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-read"> Read &amp; list files
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-upload"> Upload
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-create"> Create folder
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-rename"> Rename / move
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-storage"> Storage info
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-admin-perm-users"> Manage users
-                            </label>
-                        </div>
-                        <div style="font-size:11px;color:#aaa;margin-top:4px;">
-                            Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/admin/call</code> &nbsp;
-                            Tool graph: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">GET /mcp/admin/info</code>
-                        </div>
-                    </div>
-
-                    <div style="font-size:11px;color:#666;font-weight:600;margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px;">User MCP</div>
-                    <div class="info-row">
-                        <span class="info-label">Allow users to enable MCP</span>
-                        <label class="toggle-switch"><input type="checkbox" id="mcp-allow-user"><span class="toggle-slider"></span></label>
-                    </div>
-                    <div id="mcp-user-details" style="display:none;padding:12px 0 4px 0;">
-                        <div style="font-size:11px;color:#888;margin-bottom:10px;">
-                            Maximum permissions users can grant to their MCP agent.<br>
-                            Users cannot exceed these limits. CanUsers is always blocked for users.
-                        </div>
-                        <div style="display:flex;flex-wrap:wrap;gap:10px 24px;margin-bottom:8px;">
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-read"> Read &amp; list files
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-upload"> Upload
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-create"> Create folder
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-rename"> Rename / move
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
-                            </label>
-                            <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                                <input type="checkbox" id="mcp-user-perm-storage"> Storage info
-                            </label>
-                        </div>
-                        <div style="font-size:11px;color:#aaa;margin-top:4px;">
-                            User endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code> — scoped to user's own directory, using their API token only.
-                        </div>
-                    </div>
-                </div>
-                <!-- ── end MCP ───────────────────────────────────────────────── -->
 
                 <div style="margin-top:20px;">
                     <button class="btn" onclick="saveAdminSettings()">Save Settings</button>
@@ -409,9 +373,10 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
     </div>
+
+    <div id="tipsCard"></div>
 </div>
 
-<!-- User Modal -->
 <div id="userModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:200;align-items:center;justify-content:center;">
     <div style="background:white;padding:32px;min-width:400px;max-width:520px;width:100%;max-height:90vh;overflow-y:auto;border-radius:8px;">
         <h2 id="userModalTitle" style="font-size:18px;font-weight:500;margin-bottom:20px;">Create User</h2>
@@ -453,7 +418,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     </div>
 </div>
 
-<!-- Node Modal -->
 <div id="nodeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:200;align-items:center;justify-content:center;">
     <div style="background:#fff;border-radius:8px;padding:28px;width:440px;max-width:92vw;max-height:80vh;overflow-y:auto;">
         <h2 id="nodeModalTitle" style="font-size:18px;font-weight:500;margin-bottom:20px;">Add Storage Node</h2>
@@ -469,7 +433,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 </div>
 
     <script src="/lib/utils.js"></script>
+    <script src="/lib/challenge.js"></script>
     <script src="/lib/admin.js"></script>
+    <script src="/lib/tips.js"></script>
+    <script>
+        window._tipsAccount = { isAdmin: true, username: "` + snd.Cfg.Username + `" };
+        window._sndLoadLang().then(function() { window.renderTipsCard(); });
+    </script>
 ` + snd.ThemeSnippet("account") + `
 </body>
 </html>`
@@ -485,7 +455,6 @@ func orDash(s string) string {
 	return s
 }
 
-// ─── User Info Page (sub-users at /ad) ───────────────────────────────────────
 func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAccount) {
 	usedStorage := snd.CalcUserStorage(user.UUID)
 	storageRemain := int64(-1)
@@ -493,14 +462,22 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
 	usedPct := 0.0
 	if user.StorageLimit > 0 {
 		storageRemain = user.StorageLimit - usedStorage
-		if storageRemain < 0 { storageRemain = 0 }
+		if storageRemain < 0 {
+			storageRemain = 0
+		}
 		limitStr = snd.FormatBytes(user.StorageLimit)
 		usedPct = float64(usedStorage) / float64(user.StorageLimit) * 100
-		if usedPct > 100 { usedPct = 100 }
+		if usedPct > 100 {
+			usedPct = 100
+		}
 	}
 
 	quotaBarColor := "#1a1a1a"
-	if usedPct > 80 { quotaBarColor = "#c62828" } else if usedPct > 60 { quotaBarColor = "#f57c00" }
+	if usedPct > 80 {
+		quotaBarColor = "#c62828"
+	} else if usedPct > 60 {
+		quotaBarColor = "#f57c00"
+	}
 
 	quotaCard := ""
 	if user.StorageLimit > 0 {
@@ -543,7 +520,7 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
         .stat-sub { font-size: 12px; color: #888; margin-top: 4px; }
         .card { background: white; border: 1px solid #e0e0e0; padding: 24px; margin-bottom: 16px; border-radius: 4px; }
         .card h2 { font-size: 16px; font-weight: 500; margin-bottom: 16px; }
-        .info-row { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .info-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 11px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
         .info-row:last-child { border-bottom: none; }
         .info-label { color: #666; }
         .info-value { font-weight: 500; font-family: monospace; font-size: 13px; max-width: 60%; text-align: right; word-break: break-all; }
@@ -573,7 +550,6 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
         input:checked + .toggle-slider { background: #4caf50; }
         input:checked + .toggle-slider:before { transform: translateX(20px); }
 
-        /* Liquid Glass */
         body.th-liquid .card, body.th-liquid .stat-card {
             background: rgba(255,255,255,0.08) !important;
             backdrop-filter: blur(24px) saturate(180%) !important;
@@ -638,7 +614,6 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
         </div>
     </div>
 
-    <!-- Settings -->
     <div class="card">
         <h2>Settings</h2>
         <div class="info-row">
@@ -664,51 +639,11 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
             <label class="toggle-switch"><input type="checkbox" id="us-enable-qr"><span class="toggle-slider"></span></label>
         </div>
 
-        <!-- User MCP (only shown when admin allows it) -->
-        <div id="us-mcp-section" style="display:none;margin-top:20px;padding-top:16px;border-top:1px solid #e0e0e0;">
-            <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:10px;">MCP Server (AI Agent)</div>
-            <div style="font-size:11px;color:#aaa;margin-bottom:12px;">
-                Lets an AI agent manage your files. Uses your API token only — never admin access.
-            </div>
-            <div class="info-row">
-                <span class="info-label">Enable my MCP</span>
-                <label class="toggle-switch"><input type="checkbox" id="us-mcp-enabled"><span class="toggle-slider"></span></label>
-            </div>
-            <div id="us-mcp-perms" style="display:none;padding:10px 0 4px 0;">
-                <div style="font-size:11px;color:#888;margin-bottom:8px;">What the AI agent can do (limited by admin policy):</div>
-                <div style="display:flex;flex-wrap:wrap;gap:8px 20px;">
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-read"> Read &amp; list
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-upload"> Upload
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-create"> Create folder
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-rename"> Rename
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-delete" style="accent-color:#d32f2f;"> <span style="color:#d32f2f;">Delete</span>
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
-                        <input type="checkbox" id="us-mcp-perm-storage"> Storage info
-                    </label>
-                </div>
-                <div style="font-size:11px;color:#aaa;margin-top:8px;">
-                    Endpoint: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">POST /mcp/user/call</code> &nbsp;
-                    Info: <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px;">GET /mcp/user/info</code>
-                </div>
-            </div>
-        </div>
-
         <div style="margin-top:16px;">
             <button class="btn" onclick="saveUserSettings()">Save Settings</button>
         </div>
     </div>
 
-    <!-- Change Password -->
     <div class="card">
         <h2>Account Settings</h2>
         <button class="cp-toggle-btn" onclick="toggleCpForm()" id="cpToggleBtn">Change Password</button>
@@ -724,11 +659,18 @@ func renderUserInfoPage(w http.ResponseWriter, r *http.Request, user *snd.UserAc
         </div>
     </div>
 </div>
+    <div id="tipsCard"></div>
+</div>
 
 <div id="toast"></div>
 
+<script src="/lib/tips.js"></script>
 <script>
-/* ── Toast ── */
+window._tipsAccount = { isAdmin: false, username: "` + user.Username + `" };
+window._sndLoadLang().then(function() { window.renderTipsCard(); });
+</script>
+
+<script>
 function showToast(msg, type) {
     var t = document.getElementById('toast');
     t.textContent = msg;
@@ -736,7 +678,6 @@ function showToast(msg, type) {
     setTimeout(function() { t.style.opacity = '0'; }, 2500);
 }
 
-/* ── Token visibility ── */
 function toggleToken() {
     var inp = document.getElementById('tokenInput');
     var btn = inp.nextElementSibling;
@@ -753,7 +694,6 @@ function copyToken() {
     });
 }
 
-/* ── Settings load/save ── */
 (function loadSettings() {
     fetch('/user/settings').then(function(r) { return r.json(); }).then(function(data) {
         var s = data.settings || data;
@@ -790,7 +730,6 @@ function saveUserSettings() {
     }).catch(function() { showToast('Failed to save settings'); });
 }
 
-/* ── Change Password ── */
 function toggleCpForm() {
     var f = document.getElementById('cpForm');
     var open = f.classList.toggle('open');

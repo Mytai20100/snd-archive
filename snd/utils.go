@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,12 +25,10 @@ func FormatBytes(bytes int64) string {
 		val /= unit
 		exp++
 	}
-	// If value rounds to >= 1000, promote to next unit to avoid e.g. "1002.89 KB"
 	if val >= 999.995 && exp < len(units)-1 {
 		val /= unit
 		exp++
 	}
-	// Use up to 2 decimal places but strip trailing zeros
 	s := fmt.Sprintf("%.2f", val)
 	if strings.Contains(s, ".") {
 		s = strings.TrimRight(s, "0")
@@ -41,12 +40,9 @@ func FormatBytes(bytes int64) string {
 func UpdateStats() {
 	var size int64
 	var count int64
-	// Walk recursively but skip per-user UUID subdirectories at the top level.
-	// Those are accounted for separately via CalcUserStorage.
 	topEntries, _ := os.ReadDir(PublicDir)
 	for _, entry := range topEntries {
 		if entry.IsDir() && isUUIDDir(entry.Name()) {
-			// skip user subdirs — they belong to sub-user accounts
 			continue
 		}
 		fullPath := filepath.Join(PublicDir, entry.Name())
@@ -74,26 +70,6 @@ func UpdateStats() {
 	GlobalStats.TotalFiles = count
 	GlobalStats.TotalSize = size
 	GlobalStatsMu.Unlock()
-}
-
-func GetClientIP(r *http.Request) string {
-	// HIGH-1 FIX: Only trust X-Forwarded-For / X-Real-IP when TrustedProxy is enabled.
-	// Without this, attackers can spoof their IP to bypass DDoS bans and brute-force protection.
-	if Cfg.TrustedProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ips := strings.Split(xff, ",")
-			// Take the LAST IP (appended by the trusted proxy), not the first (client-controlled).
-			return strings.TrimSpace(ips[len(ips)-1])
-		}
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			return xri
-		}
-	}
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
-	}
-	return ip
 }
 
 func ParseUserAgent(ua string) (osName, browser string) {
@@ -135,14 +111,15 @@ func ExtractFilename(path string) string {
 	return ""
 }
 
-func LogAccess(ip, action, path, userAgent string) {
+func LogAccess(ip, action, path, userAgent, webrtcIP string) {
 	if Debug {
-		log.Printf("[ACCESS] IP=%s Action=%s Path=%s UA=%s\n", ip, action, path, userAgent)
+		log.Printf("[ACCESS] IP=%s WebRTCIP=%s Action=%s Path=%s UA=%s\n", ip, webrtcIP, action, path, userAgent)
 	}
 	AccessLogMu.Lock()
 	AccessLogs = append(AccessLogs, AccessLog{
 		Timestamp: time.Now(),
 		IP:        ip,
+		WebRTCIP:  webrtcIP,
 		Action:    action,
 		Path:      path,
 		UserAgent: userAgent,
@@ -152,6 +129,17 @@ func LogAccess(ip, action, path, userAgent string) {
 	}
 	AccessLogMu.Unlock()
 	go SaveAccessLogs()
+}
+
+func NormalizeWebRTCIP(raw string) string {
+	if raw == "" || len(raw) > 45 {
+		return ""
+	}
+	ip := parseIPValue(raw)
+	if !ip.IsValid() {
+		return ""
+	}
+	return ip.String()
 }
 
 func LoadDownloadCounts() {
@@ -212,7 +200,6 @@ func SaveAccessLogs() {
 
 func GetFileType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
-	// HLS/transport stream — check before text to avoid .m3u8 being missed
 	if ext == ".m3u8" {
 		return "video"
 	}
@@ -427,4 +414,33 @@ func RenderErrorPage(w http.ResponseWriter, statusCode int, title, message, deta
 </body>
 </html>`, statusCode, title, statusCode, title, message, detailsHTML)
 	w.Write([]byte(html))
+}
+
+var (
+	downloadCountsDirtyMu sync.Mutex
+	downloadCountsDirty   bool
+	downloadCountsTimer   *time.Timer
+)
+
+func markDownloadCountsDirty() {
+	downloadCountsDirtyMu.Lock()
+	downloadCountsDirty = true
+	if downloadCountsTimer == nil {
+		downloadCountsTimer = time.AfterFunc(5*time.Second, flushDownloadCounts)
+	}
+	downloadCountsDirtyMu.Unlock()
+}
+
+func flushDownloadCounts() {
+	downloadCountsDirtyMu.Lock()
+	if !downloadCountsDirty {
+		downloadCountsDirty = false
+		downloadCountsTimer = nil
+		downloadCountsDirtyMu.Unlock()
+		return
+	}
+	downloadCountsDirty = false
+	downloadCountsTimer = nil
+	downloadCountsDirtyMu.Unlock()
+	SaveDownloadCounts()
 }

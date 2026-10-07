@@ -1,23 +1,13 @@
-// lib/utils.js — shared utility functions
+
 
 'use strict';
 
-/**
- * Escape HTML special characters to prevent XSS.
- * @param {string} text
- * @returns {string}
- */
 function escapeHtml(text) {
     const d = document.createElement('div');
     d.textContent = text;
     return d.innerHTML;
 }
 
-/**
- * Format bytes into a human-readable string (KB, MB, GB...).
- * @param {number} bytes
- * @returns {string}
- */
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 B';
     if (bytes < 1024) return bytes + ' B';
@@ -27,11 +17,6 @@ function formatFileSize(bytes) {
     return size.toFixed(2) + ' ' + units[i];
 }
 
-/**
- * Show a dismissible toast notification.
- * @param {string} msg
- * @param {'success'|'error'|string} [type]
- */
 function showToast(msg, type) {
     type = type || 'success';
     const t = document.createElement('div');
@@ -41,12 +26,6 @@ function showToast(msg, type) {
     setTimeout(() => t.remove(), 3000);
 }
 
-/**
- * Show a confirm dialog with custom Yes/No buttons (non-blocking).
- * @param {string}   message
- * @param {Function} onYes
- * @param {Object}   [opts] - { yesLabel, yesColor, icon }
- */
 function showConfirm(message, onYes, opts) {
     opts = opts || {};
 
@@ -104,32 +83,24 @@ function showConfirm(message, onYes, opts) {
     modal.style.display = 'flex';
 }
 
-/**
- * Close a modal by its element id.
- * @param {string} id
- */
 function closeModal(id) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
 }
 
-/**
- * Open a modal by its element id using flex display for proper centering.
- * @param {string} id
- */
 function openModal(id) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'flex';
 }
 
-// Close modals when clicking on the backdrop (not on modal-content)
+
 window.addEventListener('click', e => {
     if (e.target && e.target.classList.contains('modal')) {
         closeModal(e.target.id);
     }
 });
 
-// ── Bottom loading bar (upload progress / download-URL status) ────────────────
+
 (function () {
     const BAR_ID    = '_sndProgressBar';
     const LABEL_ID  = '_sndProgressLabel';
@@ -285,7 +256,7 @@ window.addEventListener('click', e => {
         }
     };
 
-    // Restore in-progress download bar across page reloads
+    
     document.addEventListener('DOMContentLoaded', () => {
         try {
             const startTs = sessionStorage.getItem(DL_SS_KEY);

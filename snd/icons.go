@@ -9,8 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ─── Icon Config ──────────────────────────────────────────────────────────────
-
 type IconConfig struct {
 	TypeDefault  string            `yaml:"type_default"`
 	TypeFolder   string            `yaml:"type_folder"`
@@ -63,7 +61,6 @@ func LoadIconConfig() {
 	}
 }
 
-// GetIconName returns the icon name for a given filename.
 func GetIconName(filename string, isFolder bool) string {
 	if isFolder {
 		return IconCfg.TypeFolder
@@ -72,7 +69,6 @@ func GetIconName(filename string, isFolder bool) string {
 	if icon, ok := IconCfg.Extensions[ext]; ok {
 		return icon
 	}
-	// fall back to type
 	ftype := GetFileType(filename)
 	switch ftype {
 	case "image":
@@ -95,25 +91,20 @@ func GetIconName(filename string, isFolder bool) string {
 	return IconCfg.TypeDefault
 }
 
-// GetIconSVG returns the SVG string for a given icon name.
 func GetIconSVG(name string) string {
-	// Try custom file first
 	customPath := filepath.Join(IconsDir, name+".svg")
 	if data, err := os.ReadFile(customPath); err == nil {
 		return string(data)
 	}
-	// Fall back to built-in
 	if svg, ok := builtinSVGs[name]; ok {
 		return svg
 	}
 	return builtinSVGs["file"]
 }
 
-// HandleIconFile serves SVG files from the icons/ directory.
 func HandleIconFile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/icons/")
 	name = strings.TrimSuffix(name, ".svg")
-	// sanitize
 	if strings.Contains(name, "..") || strings.Contains(name, "/") {
 		http.NotFound(w, r)
 		return

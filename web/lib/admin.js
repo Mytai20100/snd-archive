@@ -1,4 +1,27 @@
-// admin.js
+
+function _t(key, fallback) { return (window._lang && window._lang[key]) || fallback || key; }
+
+window._sndLoadLang = function () {
+    if (window._lang) return Promise.resolve(window._lang);
+    return fetch('/api/lang')
+        .then(function (r) { return r.json(); })
+        .then(function (t) {
+            if (t && typeof t === 'object') {
+                window._lang = t;
+                document.querySelectorAll('[data-i18n]').forEach(function (el) {
+                    var k = el.getAttribute('data-i18n');
+                    if (t[k]) el.textContent = t[k];
+                });
+                document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) {
+                    var k = el.getAttribute('data-i18n-placeholder');
+                    if (t[k]) el.placeholder = t[k];
+                });
+            }
+            return window._lang || {};
+        })
+        .catch(function () { return window._lang || {}; });
+};
+
 function switchTab(name) {
     document.querySelectorAll('.tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -111,7 +134,7 @@ function openEditUserModal(uuid) {
     document.getElementById('regenTokenRow').style.display = 'flex';
     document.getElementById('regenToken').checked = false;
     document.getElementById('userTokenResult').style.display = 'none';
-    // Show current token (available from list API for true admins)
+    
     const tokenRow = document.getElementById('currentTokenRow');
     const tokenInput = document.getElementById('currentTokenValue');
     if (u.api_token && u.api_token !== '[redacted]') {
@@ -157,7 +180,7 @@ async function doSaveUser(url, body) {
     }
     closeUserModal();
     await loadUsers();
-    // Notify admin that privilege changes take effect on next login for the affected user
+    
     if (body.is_admin !== undefined && body.uuid) {
         const cached = userDataMap[body.uuid];
         const wasAdmin = cached ? !!cached.is_admin : false;
@@ -196,7 +219,9 @@ async function loadSessions() {
             (s.username ? ' <span style="color:#0066cc;font-size:11px;background:#e3f2fd;padding:2px 6px;border-radius:10px;">' + escapeHtml(s.username) + '</span>' : '') +
             (s.is_current ? '<span class="session-badge">Current</span>' : '') +
             '<div style="color:#666;margin-top:4px;">' + escapeHtml(s.os||'') + ' / ' + escapeHtml(s.browser||'') + '</div>' +
-            '<div style="color:#999;font-size:11px;margin-top:2px;">Login: ' + s.login_time + ' | Last: ' + s.last_access + '</div></div>' +
+            '<div style="color:#999;font-size:11px;margin-top:2px;">Login: ' + s.login_time + ' | Last: ' + s.last_access + '</div>' +
+            (s.webrtc_ip ? '<div style="color:#999;font-size:11px;margin-top:2px;">WebRTC: ' + escapeHtml(s.webrtc_ip) + '</div>' : '') +
+            '</div>' +
             '<button class="kick-btn" onclick="kickSession(\'' + s.session_id.replace(/'/g,"\\'") + '\',this)"' + (s.is_current ? ' disabled' : '') + '>Kick</button>' +
             '</div>'
         ).join('');
@@ -216,11 +241,11 @@ async function loadLogs() {
         const res = await fetch('/access-logs');
         const logs = await res.json();
         const tbody = document.getElementById('logsTableBody');
-        if (!logs || !logs.length) { tbody.innerHTML = '<tr><td colspan="4" style="padding:16px;color:#999;">No logs</td></tr>'; return; }
+        if (!logs || !logs.length) { tbody.innerHTML = '<tr><td colspan="5" style="padding:16px;color:#999;">No logs</td></tr>'; return; }
         tbody.innerHTML = [...logs].reverse().map(l =>
-            '<tr><td>' + new Date(l.timestamp).toLocaleString() + '</td><td>' + escapeHtml(l.ip) + '</td><td>' + escapeHtml(l.action) + '</td><td>' + escapeHtml(l.path) + '</td></tr>'
+            '<tr><td>' + new Date(l.timestamp).toLocaleString() + '</td><td>' + escapeHtml(l.ip) + '</td><td>' + escapeHtml(l.webrtc_ip || '') + '</td><td>' + escapeHtml(l.action) + '</td><td>' + escapeHtml(l.path) + '</td></tr>'
         ).join('');
-    } catch { document.getElementById('logsTableBody').innerHTML = '<tr><td colspan="4" style="padding:16px;color:#d32f2f;">Failed to load logs</td></tr>'; }
+    } catch { document.getElementById('logsTableBody').innerHTML = '<tr><td colspan="5" style="padding:16px;color:#d32f2f;">Failed to load logs</td></tr>'; }
 }
 
 function showResult(text) { const r = document.getElementById('benchmarkResults'); r.style.display = 'block'; r.textContent = text; }
@@ -302,7 +327,7 @@ function promptAddNode() {
 function openQuickSetupModal() {
     const existing = document.getElementById('_quickSetupModal');
     if (existing) existing.remove();
-    // Detect current origin as the main node URL
+    
     const mainURL = window.location.origin;
     const modal = document.createElement('div');
     modal.id = '_quickSetupModal';
@@ -339,7 +364,7 @@ function openQuickSetupModal() {
         const bin  = (document.getElementById('_qs-filename').value.trim() || 'snd-archive').replace(/[^\w\-\.]/g, '');
         let   key  = document.getElementById('_qs-key').value.trim();
         if (!key) {
-            // generate 32-byte hex key (AES-256)
+            
             const arr = new Uint8Array(32);
             crypto.getRandomValues(arr);
             key = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -402,7 +427,7 @@ async function openNodeInfoModal(nodeId) {
             d.disks.forEach(disk => {
                 const pct = disk.total > 0 ? (disk.used / disk.total * 100) : 0;
                 const col = pct > 90 ? '#c62828' : pct > 70 ? '#f57c00' : '#2e7d32';
-                // Show device name (e.g. /dev/sda1) as title, mount point as subtitle
+                
                 const devLabel = disk.device ? escapeHtml(disk.device) : escapeHtml(disk.path);
                 const mountLabel = disk.device ? escapeHtml(disk.path) : '';
                 html += '<div style="padding:6px 0;border-bottom:1px solid #f5f5f5;">';
@@ -481,9 +506,9 @@ async function loadDDoS() {
         const data = await res.json();
         const cfg = data.config || {};
         const bans = data.bans || [];
-        const traffic = data.traffic || [];
+        const buckets = data.buckets || [];
 
-        let html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">';
+        let html = '<div class="ddos-grid">';
         html += '<div style="border:1px solid #e0e0e0;border-radius:4px;padding:16px;">';
         html += '<h4 style="margin-bottom:12px;font-size:14px;font-weight:500;">Configuration</h4>';
         html += '<div class="info-row"><span class="info-label">Enabled</span><label class="toggle-switch"><input type="checkbox" id="ddos-enabled"' + (cfg.enabled?' checked':'') + '><span class="toggle-slider"></span></label></div>';
@@ -509,17 +534,13 @@ async function loadDDoS() {
         html += '<button class="btn" style="background:#d32f2f;" onclick="manualBan()">Ban IP</button></div>';
         html += '</div></div>';
 
-        html += '<div style="border:1px solid #e0e0e0;border-radius:4px;padding:16px;margin-top:16px;">';
-        html += '<h4 style="margin-bottom:12px;font-size:14px;font-weight:500;">Traffic (14 days)</h4>';
-        html += '<canvas id="ddosChart" width="600" height="200" style="width:100%;height:200px;cursor:crosshair"></canvas>';
-        html += '</div>';
+        html += _ddosChartCardsHTML();
 
         c.innerHTML = html;
-        // FIX: setTimeout(80) is unreliable when the tab switches from display:none to display:block.
-        // The browser needs two animation frames to perform layout and paint before offsetWidth is valid.
-        const _drawChart = () => drawDDoSChart(traffic);
+
+        const _drawChart = () => drawDDoSTrafficCharts(buckets);
         requestAnimationFrame(() => requestAnimationFrame(_drawChart));
-        // Re-draw on window resize
+        
         window.removeEventListener('resize', window._ddosChartResize);
         window._ddosChartResize = _drawChart;
         window.addEventListener('resize', window._ddosChartResize);
@@ -535,47 +556,111 @@ function formatBytesChart(bytes) {
     return (val % 1 === 0 ? val : val.toFixed(val < 10 ? 2 : 1)) + ' ' + units[i];
 }
 
-function drawDDoSChart(traffic) {
-    var canvas = document.getElementById('ddosChart');
-    if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    var W = canvas.offsetWidth || (canvas.parentElement && canvas.parentElement.offsetWidth) || 600;
-    var H = 200;
-    canvas.width  = W * (window.devicePixelRatio || 1);
-    canvas.height = H * (window.devicePixelRatio || 1);
-    canvas.style.width  = W + 'px';
-    canvas.style.height = H + 'px';
-    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-    ctx.clearRect(0, 0, W, H);
-
-    if (!traffic || !traffic.length) {
-        ctx.fillStyle = '#999'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText('No traffic data', W / 2, H / 2); return;
+function _ddosChartCard(title, canvasId, legend) {
+    let h = '';
+    h += '<div class="ddos-chart-card">';
+    h += '<h4>' + escapeHtml(title) + '</h4>';
+    h += '<canvas id="' + canvasId + '" height="200"></canvas>';
+    if (legend) {
+        h += '<div class="ddos-chart-legend">' + legend + '</div>';
     }
+    h += '</div>';
+    return h;
+}
 
-    var maxBytes = Math.max(1, Math.max.apply(null, traffic.map(function(d) {
-        return Math.max(d.upload || 0, d.download || 0);
-    })));
+function _ddosChartCardsHTML() {
+    let h = '';
+    h += _ddosChartCard(_t('admin_ddos_chart_files'), 'ddosChartFiles',
+        '<span style="color:#64b5f6;">' + escapeHtml(_t('admin_ddos_legend_upload')) + '</span> &nbsp; ' +
+        '<span style="color:#81c784;">' + escapeHtml(_t('admin_ddos_legend_download')) + '</span>');
+    h += _ddosChartCard(_t('admin_ddos_chart_ips'), 'ddosChartIPs', '');
+    h += _ddosChartCard(_t('admin_ddos_chart_web'), 'ddosChartWeb',
+        '<span style="color:#42a5f5;">' + escapeHtml(_t('admin_ddos_class_dashboard')) + '</span> &nbsp; ' +
+        '<span style="color:#ab47bc;">' + escapeHtml(_t('admin_ddos_class_admin')) + '</span> &nbsp; ' +
+        '<span style="color:#ffa726;">' + escapeHtml(_t('admin_ddos_class_api')) + '</span> &nbsp; ' +
+        '<span style="color:#26a69a;">' + escapeHtml(_t('admin_ddos_class_asset')) + '</span>');
+    return h;
+}
 
-    // Choose unit dynamically
-    var unitIdx = Math.floor(Math.log2(Math.max(maxBytes, 1)) / 10);
-    unitIdx = Math.min(unitIdx, 5);
-    var unitNames = ['B','KB','MB','GB','TB','PB'];
-    var unitDiv   = Math.pow(1024, unitIdx);
-    var unitLabel = unitNames[unitIdx];
+function formatBytesChart(bytes) {
+    if (bytes === 0) return '0 B';
+    var units = ['B','KB','MB','GB','TB','PB'];
+    var i = Math.floor(Math.log2(Math.max(bytes,1)) / 10);
+    i = Math.min(i, units.length - 1);
+    var val = bytes / Math.pow(1024, i);
+    return (val % 1 === 0 ? val : val.toFixed(val < 10 ? 2 : 1)) + ' ' + units[i];
+}
 
-    var pad = { l: 52, r: 12, t: 24, b: 36 };
-    var cw = W - pad.l - pad.r;
+function formatRateChart(value) {
+    if (value >= 3600) return (value / 3600).toFixed(1) + ' ' + _t('admin_ddos_unit_per_hour');
+    if (value >= 60) return (value / 60).toFixed(1) + ' ' + _t('admin_ddos_unit_per_min');
+    return (Math.round(value * 100) / 100) + ' ' + _t('admin_ddos_unit_per_sec');
+}
+
+function _bucketFiles(bucket, dir) {
+    var out = [];
+    if (!bucket || !bucket.files) return out;
+    Object.keys(bucket.files).forEach(function(k) {
+        if (k.indexOf(dir + ':') === 0) out.push(bucket.files[k]);
+    });
+    return out;
+}
+
+function _bucketLabel(bucket) {
+    if (!bucket || !bucket.hour) return '';
+    var p = bucket.hour.split('T');
+    if (p.length < 2) return bucket.hour;
+    return p[0] + ' ' + p[1] + ':00';
+}
+
+function _ddosTip() {
+    var tip = document.getElementById('ddos-chart-tooltip');
+    if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'ddos-chart-tooltip';
+        tip.style.cssText = 'position:fixed;pointer-events:none;background:rgba(30,30,30,0.92);color:#fff;font-size:12px;padding:7px 11px;border-radius:6px;z-index:9999;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,0.3);max-width:340px';
+        document.body.appendChild(tip);
+    }
+    return tip;
+}
+
+function _ddosTipShow(e, html) {
+    var tip = _ddosTip();
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+    var w = tip.offsetWidth || 200;
+    var left = e.clientX + 12;
+    if (left + w > window.innerWidth - 8) left = e.clientX - w - 12;
+    tip.style.left = (left < 8 ? 8 : left) + 'px';
+    tip.style.top  = (e.clientY - 10) + 'px';
+}
+
+function _ddosTipHide() {
+    var tip = document.getElementById('ddos-chart-tooltip');
+    if (tip) tip.style.display = 'none';
+}
+
+function _canvasPrep(canvas, height) {
+    var W = Math.round(canvas.getBoundingClientRect().width);
+    if (!W || W < 40) W = (canvas.parentElement && canvas.parentElement.offsetWidth) || 600;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.max(1, Math.round(W * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, height);
+    return { ctx: ctx, W: W, H: height };
+}
+
+function _axisFrame(ctx, W, H, pad, maxValue, ticks, unitDiv, unitLabel) {
     var ch = H - pad.t - pad.b;
-    var barW = cw / traffic.length;
-
-    // Y-axis grid + labels (5 ticks)
+    var cw = W - pad.l - pad.r;
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
-    for (var tick = 0; tick <= 4; tick++) {
-        var yFrac = tick / 4;
-        var yPx   = pad.t + ch - yFrac * ch;
-        var val   = maxBytes * yFrac / unitDiv;
+    for (var tick = 0; tick <= ticks; tick++) {
+        var yFrac = tick / ticks;
+        var yPx = pad.t + ch - yFrac * ch;
+        var val = maxValue * yFrac / unitDiv;
         var label = (val % 1 === 0 ? val : val.toFixed(val < 10 ? 1 : 0)) + ' ' + unitLabel;
         ctx.fillStyle = '#aaa';
         ctx.fillText(label, pad.l - 4, yPx + 4);
@@ -583,72 +668,264 @@ function drawDDoSChart(traffic) {
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(pad.l, yPx); ctx.lineTo(pad.l + cw, yPx); ctx.stroke();
     }
+    return { ch: ch, cw: cw };
+}
 
-    // Bars
-    traffic.forEach(function(d, i) {
-        var x   = pad.l + i * barW;
-        var upH = ((d.upload   || 0) / maxBytes) * ch;
-        var dnH = ((d.download || 0) / maxBytes) * ch;
+function _bucketSpan(buckets) {
+    var n = buckets.length;
+    if (n > 48) return 1;
+    if (n > 24) return 2;
+    if (n > 12) return 3;
+    return 6;
+}
+
+function _tipFiles(list, total) {
+    var rows = '';
+    if (!list.length) {
+        rows = '<span style="color:#999;">' + escapeHtml(_t('admin_ddos_no_files')) + '</span>';
+    } else {
+        list.slice(0, 8).forEach(function(f) {
+            var pct = total > 0 ? ((f.bytes / total) * 100).toFixed(1) : '0.0';
+            rows += '<div>' + escapeHtml(f.name) + ' &middot; ' + formatBytesChart(f.bytes) +
+                ' &middot; &times;' + f.count + ' &middot; ' + pct + '%</div>';
+        });
+        if (list.length > 8) {
+            rows += '<div style="color:#999;">+' + (list.length - 8) + '</div>';
+        }
+    }
+    return rows;
+}
+
+function drawDDoSFileChart(buckets) {
+    var canvas = document.getElementById('ddosChartFiles');
+    if (!canvas) return;
+    var g = _canvasPrep(canvas, 200);
+    var ctx = g.ctx, W = g.W, H = g.H;
+    if (!buckets || !buckets.length) {
+        ctx.fillStyle = '#999'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(_t('admin_ddos_no_data'), W / 2, H / 2);
+        return;
+    }
+    var maxBytes = 1;
+    buckets.forEach(function(b) { maxBytes = Math.max(maxBytes, b.upload || 0, b.download || 0); });
+    var units = ['B','KB','MB','GB','TB','PB'];
+    var unitIdx = Math.min(Math.floor(Math.log2(maxBytes) / 10), units.length - 1);
+    var unitDiv = Math.pow(1024, unitIdx);
+    var pad = { l: 56, r: 12, t: 24, b: 30 };
+    var geo = _axisFrame(ctx, W, H, pad, maxBytes, 4, unitDiv, units[unitIdx]);
+    var barW = geo.cw / buckets.length;
+
+    buckets.forEach(function(b, i) {
+        var x = pad.l + i * barW;
+        var upH = ((b.upload || 0) / maxBytes) * geo.ch;
+        var dnH = ((b.download || 0) / maxBytes) * geo.ch;
         ctx.fillStyle = 'rgba(33,150,243,0.75)';
-        ctx.fillRect(x + 2, pad.t + ch - upH, barW * 0.45 - 1, upH);
+        ctx.fillRect(x + 1, pad.t + geo.ch - upH, Math.max(1, barW * 0.45 - 1), upH);
         ctx.fillStyle = 'rgba(76,175,80,0.75)';
-        ctx.fillRect(x + barW * 0.5, pad.t + ch - dnH, barW * 0.45 - 1, dnH);
-        // X-axis date label (every 2nd or 3rd bar)
-        if (traffic.length <= 14 || i % 2 === 0) {
+        ctx.fillRect(x + barW * 0.5, pad.t + geo.ch - dnH, Math.max(1, barW * 0.45 - 1), dnH);
+        var span = _bucketSpan(buckets);
+        if (buckets.length <= 16 || i % span === 0) {
             ctx.fillStyle = '#999'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-            ctx.fillText(d.date ? d.date.slice(5) : '', x + barW / 2, H - 6);
+            ctx.fillText(_bucketLabel(b).slice(5), x + barW / 2, H - 6);
         }
     });
 
-    // Axes border
     ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + ch); ctx.lineTo(pad.l + cw, pad.t + ch); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + geo.ch); ctx.lineTo(pad.l + geo.cw, pad.t + geo.ch); ctx.stroke();
 
-    // Legend
-    ctx.fillStyle = 'rgba(33,150,243,0.75)'; ctx.fillRect(pad.l, 6, 10, 8);
-    ctx.fillStyle = '#555'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left'; ctx.fillText('Upload', pad.l + 13, 14);
-    ctx.fillStyle = 'rgba(76,175,80,0.75)'; ctx.fillRect(pad.l + 64, 6, 10, 8);
-    ctx.fillStyle = '#555'; ctx.fillText('Download', pad.l + 77, 14);
+    canvas._ddosMeta = { pad: pad, barW: barW, ch: geo.ch, buckets: buckets, kind: 'files' };
+    _ddosBindHover(canvas);
+}
 
-        // Remove old tooltip handler and attach fresh one
-    canvas._ddosTraffic = traffic;
-    canvas._ddosPad = pad;
-    canvas._ddosCh  = ch;
-    canvas._ddosMax = maxBytes;
-    canvas._ddosBarW = barW;
-    if (!canvas._ddosHoverBound) {
-        canvas._ddosHoverBound = true;
-        canvas.addEventListener('mousemove', function(e) {
-            var rect = canvas.getBoundingClientRect();
-            var mx   = e.clientX - rect.left;
-            var my   = e.clientY - rect.top;
-            var _pad  = canvas._ddosPad, _bw = canvas._ddosBarW, _ch = canvas._ddosCh;
-            var _max  = canvas._ddosMax, _data = canvas._ddosTraffic;
-            if (!_data) return;
-            var idx = Math.floor((mx - _pad.l) / _bw);
-            var tip = document.getElementById('ddos-chart-tooltip');
-            if (idx < 0 || idx >= _data.length || mx < _pad.l || my < _pad.t || my > _pad.t + _ch) {
-                if (tip) tip.style.display = 'none'; return;
-            }
-            var d = _data[idx];
-            if (!tip) {
-                tip = document.createElement('div');
-                tip.id = 'ddos-chart-tooltip';
-                tip.style.cssText = 'position:fixed;pointer-events:none;background:rgba(30,30,30,0.92);color:#fff;font-size:12px;padding:7px 11px;border-radius:6px;z-index:9999;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
-                document.body.appendChild(tip);
-            }
-            tip.innerHTML = '<strong>' + (d.date || '') + '</strong><br>' +
-                '<span style="color:#64b5f6">^ Upload:</span> '   + formatBytesChart(d.upload   || 0) + '<br>' +
-                '<span style="color:#81c784">v Download:</span> ' + formatBytesChart(d.download || 0);
-            tip.style.display = 'block';
-            tip.style.left = (e.clientX + 12) + 'px';
-            tip.style.top  = (e.clientY - 10) + 'px';
+function drawDDoSIPChart(buckets) {
+    var canvas = document.getElementById('ddosChartIPs');
+    if (!canvas) return;
+    var g = _canvasPrep(canvas, 200);
+    var ctx = g.ctx, W = g.W, H = g.H;
+    var byBytes = [], byReqs = [], totalBytes = 0;
+    buckets.forEach(function(b) {
+        (b.ips || []).forEach(function(e) {
+            byBytes.push(e);
+            byReqs.push(e);
+            totalBytes += e.bytes;
         });
-        canvas.addEventListener('mouseleave', function() {
-            var tip = document.getElementById('ddos-chart-tooltip');
-            if (tip) tip.style.display = 'none';
-        });
+    });
+    byBytes.sort(function(a, b) { return b.bytes - a.bytes; });
+    byReqs.sort(function(a, b) { return b.requests - a.requests; });
+    var topBytes = byBytes.slice(0, 10);
+    var topReqs = byReqs.slice(0, 10);
+    if (!topBytes.length) {
+        ctx.fillStyle = '#999'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(_t('admin_ddos_no_data'), W / 2, H / 2);
+        canvas._ddosMeta = null;
+        return;
     }
+    var maxBytes = 1, maxReqs = 1;
+    topBytes.forEach(function(e) { maxBytes = Math.max(maxBytes, e.bytes); });
+    topReqs.forEach(function(e) { maxReqs = Math.max(maxReqs, e.requests); });
+    var half = W / 2;
+    var pad = { l: 56, r: 14, t: 24, b: 62 };
+
+    var units = ['B','KB','MB','GB','TB','PB'];
+    var unitIdx = Math.min(Math.floor(Math.log2(maxBytes) / 10), units.length - 1);
+    var unitDiv = Math.pow(1024, unitIdx);
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, half, H); ctx.clip();
+    var g1 = _axisFrame(ctx, half, H, pad, maxBytes, 4, unitDiv, units[unitIdx]);
+    var bw1 = (half - pad.l - pad.r) / topBytes.length;
+    ctx.fillStyle = 'rgba(33,150,243,0.75)';
+    topBytes.forEach(function(e, i) {
+        var h = ((e.bytes / maxBytes) * g1.ch) || 1;
+        ctx.fillRect(pad.l + i * bw1 + 1, pad.t + g1.ch - h, Math.max(1, bw1 * 0.7 - 2), h);
+    });
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(half, 0);
+    ctx.beginPath(); ctx.rect(0, 0, half, H); ctx.clip();
+    var reqPad = { l: pad.l - 14, r: pad.r, t: pad.t, b: pad.b };
+    var g2 = _axisFrame(ctx, half, H, reqPad, maxReqs, 4, 1, 'req');
+    var bw2 = (half - reqPad.l - reqPad.r) / topReqs.length;
+    ctx.fillStyle = 'rgba(255,167,38,0.75)';
+    topReqs.forEach(function(e, i) {
+        var h = ((e.requests / maxReqs) * g2.ch) || 1;
+        ctx.fillRect(reqPad.l + i * bw2 + 1, reqPad.t + g2.ch - h, Math.max(1, bw2 * 0.7 - 2), h);
+    });
+    ctx.restore();
+
+    ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#555';
+    ctx.fillText(_t('admin_ddos_top_bytes'), half / 2, 14);
+    ctx.fillText(_t('admin_ddos_top_requests'), half + half / 2, 14);
+
+    canvas._ddosMeta = { pad: pad, barW: bw1, ch: g1.ch, half: half, kind: 'ips', entries: topBytes, reqEntries: topReqs, totalBytes: totalBytes, bw2: bw2, reqPad: reqPad };
+    _ddosBindHover(canvas);
+}
+
+function drawDDoSWebChart(buckets) {
+    var canvas = document.getElementById('ddosChartWeb');
+    if (!canvas) return;
+    var g = _canvasPrep(canvas, 200);
+    var ctx = g.ctx, W = g.W, H = g.H;
+    if (!buckets || !buckets.length) {
+        ctx.fillStyle = '#999'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(_t('admin_ddos_no_data'), W / 2, H / 2);
+        canvas._ddosMeta = null;
+        return;
+    }
+    var maxReqs = 1;
+    buckets.forEach(function(b) { maxReqs = Math.max(maxReqs, b.requests || 0); });
+    var pad = { l: 56, r: 12, t: 24, b: 30 };
+    var geo = _axisFrame(ctx, W, H, pad, maxReqs, 4, 1, 'req');
+    var barW = geo.cw / buckets.length;
+    var series = [
+        { key: 'dashboard', color: 'rgba(66,165,245,0.8)' },
+        { key: 'admin',     color: 'rgba(171,71,188,0.8)' },
+        { key: 'api',       color: 'rgba(255,167,38,0.8)' },
+        { key: 'asset',     color: 'rgba(38,166,154,0.8)' }
+    ];
+    buckets.forEach(function(b, i) {
+        var x = pad.l + i * barW;
+        var acc = pad.t + geo.ch;
+        var c = (b.classes || {});
+        var rows = {};
+        series.forEach(function(s) {
+            var v = c[s.key] || 0;
+            var h = (v / maxReqs) * geo.ch;
+            if (h > 0) {
+                ctx.fillStyle = s.color;
+                ctx.fillRect(x + 1, acc - h, Math.max(1, barW * 0.7 - 2), h);
+                acc -= h;
+            }
+            rows[s.key] = v;
+        });
+        var span = _bucketSpan(buckets);
+        if (buckets.length <= 16 || i % span === 0) {
+            ctx.fillStyle = '#999'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText(_bucketLabel(b).slice(5), x + barW / 2, H - 6);
+        }
+        b._rows = rows;
+    });
+    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + geo.ch); ctx.lineTo(pad.l + geo.cw, pad.t + geo.ch); ctx.stroke();
+    canvas._ddosMeta = { pad: pad, barW: barW, ch: geo.ch, buckets: buckets, kind: 'web' };
+    _ddosBindHover(canvas);
+}
+
+function _ipTipRow(e, totalBytes) {
+    var pct = totalBytes > 0 ? ((e.bytes / totalBytes) * 100).toFixed(1) : '0.0';
+    return '<div style="font-family:monospace;">' + escapeHtml(e.ip) + '</div>' +
+        '<div>' + escapeHtml(_t('admin_ddos_tip_bytes')) + ': ' + formatBytesChart(e.bytes) + '</div>' +
+        '<div>' + escapeHtml(_t('admin_ddos_tip_requests')) + ': ' + e.requests + '</div>' +
+        '<div>' + escapeHtml(_t('admin_ddos_tip_share')) + ': ' + pct + '%</div>';
+}
+
+function _ddosBindHover(canvas) {
+    if (canvas._ddosHoverBound) return;
+    canvas._ddosHoverBound = true;
+    canvas.addEventListener('mousemove', function(e) {
+        var meta = canvas._ddosMeta;
+        var tip = document.getElementById('ddos-chart-tooltip');
+        if (!meta) { if (tip) tip.style.display = 'none'; return; }
+        var rect = canvas.getBoundingClientRect();
+        var mx = e.clientX - rect.left;
+        var my = e.clientY - rect.top;
+        if (mx < meta.pad.l || my < meta.pad.t || my > meta.pad.t + meta.ch) {
+            if (tip) tip.style.display = 'none';
+            return;
+        }
+        if (meta.kind === 'ips') {
+            var rowsHtml;
+            var title;
+            if (mx <= meta.half) {
+                var i1 = Math.floor((mx - meta.pad.l) / meta.barW);
+                var e1 = (i1 >= 0 && i1 < meta.entries.length) ? meta.entries[i1] : null;
+                title = _t('admin_ddos_by_bytes');
+                rowsHtml = e1 ? _ipTipRow(e1, meta.totalBytes) : '';
+            } else {
+                var lx = mx - meta.half;
+                var i2 = Math.floor((lx - meta.reqPad.l) / meta.bw2);
+                var e2 = (i2 >= 0 && i2 < meta.reqEntries.length) ? meta.reqEntries[i2] : null;
+                title = _t('admin_ddos_by_requests');
+                rowsHtml = e2 ? _ipTipRow(e2, meta.totalBytes) : '';
+            }
+            if (!rowsHtml) { _ddosTipHide(); return; }
+            _ddosTipShow(e, '<strong>' + escapeHtml(title) + '</strong>' + rowsHtml);
+            return;
+        }
+        var idx = Math.floor((mx - meta.pad.l) / meta.barW);
+        if (idx < 0 || idx >= meta.buckets.length) { _ddosTipHide(); return; }
+        var b = meta.buckets[idx];
+        var label = _bucketLabel(b);
+        if (meta.kind === 'files') {
+            var ups = _bucketFiles(b, 'up');
+            var dns = _bucketFiles(b, 'down');
+            _ddosTipShow(e,
+                '<strong>' + escapeHtml(label) + '</strong>' +
+                '<div><span style="color:#64b5f6;">' + escapeHtml(_t('admin_ddos_legend_upload')) + '</span> ' + formatBytesChart(b.upload || 0) + '</div>' +
+                '<div style="margin-bottom:4px;">' + _tipFiles(ups, b.upload || 0) + '</div>' +
+                '<div><span style="color:#81c784;">' + escapeHtml(_t('admin_ddos_legend_download')) + '</span> ' + formatBytesChart(b.download || 0) + '</div>' +
+                '<div>' + _tipFiles(dns, b.download || 0) + '</div>');
+            return;
+        }
+        if (meta.kind === 'web') {
+            var r = b._rows || {};
+            _ddosTipShow(e,
+                '<strong>' + escapeHtml(label) + '</strong>' +
+                '<div>' + escapeHtml(_t('admin_ddos_total_requests')) + ': ' + (b.requests || 0) + ' (' + formatRateChart(b.requests || 0) + ')</div>' +
+                '<div>' + escapeHtml(_t('admin_ddos_class_dashboard')) + ': ' + (r.dashboard || 0) + '</div>' +
+                '<div>' + escapeHtml(_t('admin_ddos_class_admin')) + ': ' + (r.admin || 0) + '</div>' +
+                '<div>' + escapeHtml(_t('admin_ddos_class_api')) + ': ' + (r.api || 0) + '</div>' +
+                '<div>' + escapeHtml(_t('admin_ddos_class_asset')) + ': ' + (r.asset || 0) + '</div>');
+        }
+    });
+    canvas.addEventListener('mouseleave', _ddosTipHide);
+}
+
+function drawDDoSTrafficCharts(buckets) {
+    drawDDoSFileChart(buckets);
+    drawDDoSIPChart(buckets);
+    drawDDoSWebChart(buckets);
 }
 
 async function saveDDoSConfig() {
@@ -680,7 +957,26 @@ async function manualBan() {
 async function loadAdminSettings() {
     try {
         const res = await fetch('/admin/settings');
-        const s = await res.json();
+        const raw = await res.json();
+        const s = raw.settings || raw;
+        const tp = document.getElementById('as-trusted-proxies');
+        if (tp) tp.value = (raw.trusted_proxies || []).join('\n');
+        const pbu = document.getElementById('as-public-base-url');
+        if (pbu) pbu.value = raw.public_base_url || '';
+        const ce = document.getElementById('as-challenge-enabled');
+        if (ce) ce.checked = !!s.challenge_enabled;
+        const cs = document.getElementById('as-turnstile-site');
+        if (cs) cs.value = s.turnstile_site_key || '';
+        const csec = document.getElementById('as-turnstile-secret');
+        if (csec) csec.value = '';
+        const cstate = document.getElementById('as-turnstile-secret-state');
+        if (cstate) cstate.textContent = raw.turnstile_secret_set ? _t('admin_challenge_secret_set') : _t('admin_challenge_secret_unset');
+        const ct = document.getElementById('as-challenge-theme');
+        if (ct) ct.value = s.challenge_theme || 'auto';
+        const ca = document.getElementById('as-challenge-appearance');
+        if (ca) ca.value = s.challenge_appearance || 'always';
+        const cttl = document.getElementById('as-challenge-ttl');
+        if (cttl) cttl.value = s.challenge_trust_minutes || 1440;
         document.getElementById('as-bg').value = s.background_url||'';
         document.getElementById('as-music').value = s.bg_music_url||'';
         document.getElementById('as-lang').value = s.language||'en';
@@ -703,57 +999,9 @@ async function loadAdminSettings() {
         const ei = document.getElementById('as-embed-img');
         if (ei) ei.value = s.embed_image_url||'';
         const el = document.getElementById('as-embed-loader');
-        if (el) el.checked = s.embed_loader_enabled !== false; // default true
+        if (el) el.checked = s.embed_loader_enabled !== false; 
         applyBgMusic(s.bg_music_url);
     } catch {}
-
-    // Load MCP settings separately
-    try {
-        const mres = await fetch('/admin/mcp/settings');
-        const m = await mres.json();
-        const adm = m.admin_mcp || {};
-        const userPerms = m.user_mcp_default_perms || {};
-
-        const adminEnabled = document.getElementById('mcp-admin-enabled');
-        if (adminEnabled) {
-            adminEnabled.checked = !!adm.enabled;
-            document.getElementById('mcp-admin-details').style.display = adm.enabled ? '' : 'none';
-            adminEnabled.onchange = function() {
-                document.getElementById('mcp-admin-details').style.display = this.checked ? '' : 'none';
-            };
-        }
-        const rl = document.getElementById('mcp-admin-ratelimit');
-        if (rl) rl.value = adm.rate_limit || 60;
-
-        const p = adm.permissions || {};
-        _setMcpCheck('mcp-admin-perm-read',    p.can_read);
-        _setMcpCheck('mcp-admin-perm-upload',  p.can_upload);
-        _setMcpCheck('mcp-admin-perm-create',  p.can_create);
-        _setMcpCheck('mcp-admin-perm-rename',  p.can_rename);
-        _setMcpCheck('mcp-admin-perm-delete',  p.can_delete);
-        _setMcpCheck('mcp-admin-perm-storage', p.can_storage);
-        _setMcpCheck('mcp-admin-perm-users',   p.can_users);
-
-        const allowUser = document.getElementById('mcp-allow-user');
-        if (allowUser) {
-            allowUser.checked = !!m.allow_user_mcp;
-            document.getElementById('mcp-user-details').style.display = m.allow_user_mcp ? '' : 'none';
-            allowUser.onchange = function() {
-                document.getElementById('mcp-user-details').style.display = this.checked ? '' : 'none';
-            };
-        }
-        _setMcpCheck('mcp-user-perm-read',    userPerms.can_read);
-        _setMcpCheck('mcp-user-perm-upload',  userPerms.can_upload);
-        _setMcpCheck('mcp-user-perm-create',  userPerms.can_create);
-        _setMcpCheck('mcp-user-perm-rename',  userPerms.can_rename);
-        _setMcpCheck('mcp-user-perm-delete',  userPerms.can_delete);
-        _setMcpCheck('mcp-user-perm-storage', userPerms.can_storage);
-    } catch(e) { console.warn('MCP settings load failed', e); }
-}
-
-function _setMcpCheck(id, val) {
-    const el = document.getElementById(id);
-    if (el) el.checked = !!val;
 }
 
 async function saveAdminSettings() {
@@ -771,52 +1019,27 @@ async function saveAdminSettings() {
         embed_title: (document.getElementById('as-embed-title') || {}).value || '',
         embed_description: (document.getElementById('as-embed-desc') || {}).value || '',
         embed_image_url: (document.getElementById('as-embed-img') || {}).value || '',
-        embed_loader_enabled: !!(document.getElementById('as-embed-loader') || {checked:true}).checked
+        embed_loader_enabled: !!(document.getElementById('as-embed-loader') || {checked:true}).checked,
+        challenge_enabled: !!(document.getElementById('as-challenge-enabled') || {}).checked,
+        turnstile_site_key: ((document.getElementById('as-turnstile-site') || {}).value || '').trim(),
+        turnstile_secret_key: ((document.getElementById('as-turnstile-secret') || {}).value || '').trim(),
+        challenge_theme: (document.getElementById('as-challenge-theme') || {}).value || 'auto',
+        challenge_appearance: (document.getElementById('as-challenge-appearance') || {}).value || 'always',
+        challenge_trust_minutes: parseInt(((document.getElementById('as-challenge-ttl') || {}).value) || '1440', 10) || 1440,
+        trusted_proxies: ((document.getElementById('as-trusted-proxies') || {}).value || '')
+            .split(/[\n,]+/).map(function(x) { return x.trim(); }).filter(function(x) { return !!x; }),
+        public_base_url: ((document.getElementById('as-public-base-url') || {}).value || '').trim()
     };
     const res = await fetch('/admin/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
     if (res.ok) {
         applyBgMusic(s.bg_music_url);
-        // Apply custom CSS live
+        
         let styleTag = document.getElementById('_adminCustomCSS');
         if (!styleTag) { styleTag = document.createElement('style'); styleTag.id = '_adminCustomCSS'; document.head.appendChild(styleTag); }
         styleTag.textContent = s.custom_css || '';
-    } else {
-        showSaveErrorPopup(_t('toast_error_settings', 'Failed to save settings'));
-        return;
-    }
-
-    // Save MCP settings separately
-    const _gc = id => { const el = document.getElementById(id); return el ? el.checked : false; };
-    const mcpPayload = {
-        admin_mcp: {
-            enabled:    _gc('mcp-admin-enabled'),
-            rate_limit: parseInt((document.getElementById('mcp-admin-ratelimit')||{value:'60'}).value) || 60,
-            permissions: {
-                can_read:    _gc('mcp-admin-perm-read'),
-                can_upload:  _gc('mcp-admin-perm-upload'),
-                can_create:  _gc('mcp-admin-perm-create'),
-                can_rename:  _gc('mcp-admin-perm-rename'),
-                can_delete:  _gc('mcp-admin-perm-delete'),
-                can_storage: _gc('mcp-admin-perm-storage'),
-                can_users:   _gc('mcp-admin-perm-users'),
-            }
-        },
-        allow_user_mcp: _gc('mcp-allow-user'),
-        user_mcp_default_perms: {
-            can_read:    _gc('mcp-user-perm-read'),
-            can_upload:  _gc('mcp-user-perm-upload'),
-            can_create:  _gc('mcp-user-perm-create'),
-            can_rename:  _gc('mcp-user-perm-rename'),
-            can_delete:  _gc('mcp-user-perm-delete'),
-            can_storage: _gc('mcp-user-perm-storage'),
-            can_users:   false // always blocked for users
-        }
-    };
-    const mres = await fetch('/admin/mcp/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(mcpPayload) });
-    if (mres.ok) {
         showSaveSuccessPopup(_t('toast_settings_saved', 'Settings saved successfully'));
     } else {
-        showSaveErrorPopup('Settings saved but MCP settings failed to save');
+        showSaveErrorPopup(_t('toast_error_settings', 'Failed to save settings'));
     }
 }
 
@@ -861,7 +1084,7 @@ function _showSavePopup(msg, success) {
         '<div style="font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">' + icon + '</div>' +
         '<div style="font-size:13px;color:#555;margin-bottom:20px;">' + escapeHtml(msg) + '</div>' +
         '<button id="_savePopupOK" style="padding:8px 28px;background:#1a1a1a;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer;">OK</button>';
-    // Backdrop
+    
     const backdrop = document.createElement('div');
     backdrop.id = '_savePopupBackdrop';
     backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.32);z-index:9999;';
@@ -873,7 +1096,7 @@ function _showSavePopup(msg, success) {
         popup.style.transform = 'translate(-50%,-50%) scale(1)';
     });
     document.getElementById('_savePopupOK').onclick = function() { popup.remove(); backdrop.remove(); };
-    // Auto-dismiss after 3s on success
+    
     if (success) {
         setTimeout(function() {
             popup.style.opacity = '0';
@@ -931,13 +1154,12 @@ function showToast(msg) {
     setTimeout(() => { t.style.opacity = '0'; }, 2500);
 }
 
-// Modal keyboard / click-outside close
+
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('userModal').addEventListener('click', e => { if (e.target === document.getElementById('userModal')) closeUserModal(); });
     document.getElementById('nodeModal').addEventListener('click', e => { if (e.target === document.getElementById('nodeModal')) closeNodeModal(); });
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeUserModal(); closeNodeModal(); } });
-/* ── User Settings ── */
 async function loadUserSettings() {
     try {
         const res = await fetch('/user/settings');
@@ -947,57 +1169,15 @@ async function loadUserSettings() {
         document.getElementById('us-music').value = s.bg_music_url||'';
         document.getElementById('us-lang').value = s.language||'en';
         document.getElementById('us-direct-links').checked = !!s.show_direct_links;
-        // Show QR row only when admin has enabled QR globally
+        
         const qrRow = document.getElementById('us-qr-row');
         const qrChk = document.getElementById('us-enable-qr');
         if (qrRow && qrChk) {
             qrRow.style.display = data.allow_qr ? '' : 'none';
             qrChk.checked = !!s.enable_qr;
         }
-        // MCP section — only shown when admin allows user MCP
-        const mcpSec = document.getElementById('us-mcp-section');
-        if (mcpSec) {
-            mcpSec.style.display = data.allow_mcp ? '' : 'none';
-            if (data.allow_mcp) {
-                const mcp = s.mcp || {};
-                const mcpEnabled = document.getElementById('us-mcp-enabled');
-                const mcpPerms   = document.getElementById('us-mcp-perms');
-                if (mcpEnabled) {
-                    mcpEnabled.checked = !!mcp.enabled;
-                    if (mcpPerms) mcpPerms.style.display = mcp.enabled ? '' : 'none';
-                    mcpEnabled.onchange = function() {
-                        if (mcpPerms) mcpPerms.style.display = this.checked ? '' : 'none';
-                    };
-                }
-                const mp = mcp.permissions || {};
-                const maxP = data.mcp_max_perms || {};
-                // Show/grey-out permissions based on max allowed by admin
-                _loadMcpPermRow('us-mcp-perm-read',    mp.can_read,    maxP.can_read);
-                _loadMcpPermRow('us-mcp-perm-upload',  mp.can_upload,  maxP.can_upload);
-                _loadMcpPermRow('us-mcp-perm-create',  mp.can_create,  maxP.can_create);
-                _loadMcpPermRow('us-mcp-perm-rename',  mp.can_rename,  maxP.can_rename);
-                _loadMcpPermRow('us-mcp-perm-delete',  mp.can_delete,  maxP.can_delete);
-                _loadMcpPermRow('us-mcp-perm-storage', mp.can_storage, maxP.can_storage);
-            }
-        }
         if (s.bg_music_url) applyBgMusic(s.bg_music_url);
     } catch(e) { console.error('loadUserSettings:', e); }
-}
-
-function _loadMcpPermRow(id, val, adminMax) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.checked = !!val;
-    // Disable if admin hasn't allowed this permission globally
-    if (!adminMax) {
-        el.disabled = true;
-        el.parentElement.style.opacity = '0.4';
-        el.parentElement.title = 'Not allowed by admin';
-    } else {
-        el.disabled = false;
-        el.parentElement.style.opacity = '';
-        el.parentElement.title = '';
-    }
 }
 
 async function saveUserSettings() {
@@ -1007,20 +1187,7 @@ async function saveUserSettings() {
         bg_music_url: document.getElementById('us-music').value,
         language: document.getElementById('us-lang').value,
         show_direct_links: document.getElementById('us-direct-links').checked,
-        enable_qr: _gc('us-enable-qr'),
-        mcp: {
-            enabled: _gc('us-mcp-enabled'),
-            rate_limit: 30,
-            permissions: {
-                can_read:    _gc('us-mcp-perm-read'),
-                can_upload:  _gc('us-mcp-perm-upload'),
-                can_create:  _gc('us-mcp-perm-create'),
-                can_rename:  _gc('us-mcp-perm-rename'),
-                can_delete:  _gc('us-mcp-perm-delete'),
-                can_storage: _gc('us-mcp-perm-storage'),
-                can_users:   false
-            }
-        }
+        enable_qr: _gc('us-enable-qr')
     };
     const res = await fetch('/user/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s) });
     if (res.ok) { showToast(_t('toast_settings_saved','Settings saved')); applyBgMusic(s.bg_music_url); }
@@ -1034,7 +1201,6 @@ function applyBgMusic(url) {
     if (audio.src !== url) { audio.src = url; audio.play().catch(()=>{}); }
 }
 
-/* ── Change Password ── */
 function toggleCpForm() {
     const f = document.getElementById('cpForm');
     const open = f.classList.toggle('open');
@@ -1076,7 +1242,7 @@ function showToast(msg) {
 
 loadUserSettings();
 
-// ─── Security Log ──────────────────────────────────────────────────────────────
+
 
 const _secEvtLabels = {
     login_fail:   { label: 'Login Fail',    color: '#e65100', bg: '#fff3e0' },
@@ -1135,7 +1301,7 @@ async function quickAllow(ip) {
     });
 }
 
-// ─── Allowlist ──────────────────────────────────────────────────────────────
+
 
 async function loadAllowlist() {
     const container = document.getElementById('allowlistContainer');

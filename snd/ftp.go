@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// StartFTPServer starts a minimal FTP server bound to Cfg.FTPPort.
-// Supports: USER, PASS, QUIT, SYST, FEAT, PWD, CWD, CDUP, TYPE,
-//           PASV, LIST, NLST, RETR, STOR, DELE, MKD, RMD, RNFR, RNTO, NOOP, SIZE, MDTM
 func StartFTPServer() {
 	addr := Cfg.IP + ":" + Cfg.FTPPort
 	ln, err := net.Listen("tcp", addr)
@@ -37,17 +34,15 @@ func StartFTPServer() {
 
 type ftpSession struct {
 	conn       net.Conn
-	cwd        string // virtual cwd, relative to baseDir
+	cwd        string
 	loggedIn   bool
 	username   string
-	userUUID   string // empty = admin, non-empty = sub-user UUID
+	userUUID   string
 	passiveLn  net.Listener
 	renameFrom string
 	binaryMode bool
 }
 
-// baseDir returns the filesystem root for this session.
-// Admin → PublicDir, sub-user → UserPublicDir(uuid).
 func (s *ftpSession) baseDir() string {
 	if s.userUUID != "" {
 		return UserPublicDir(s.userUUID)
@@ -127,15 +122,12 @@ func handleFTPConn(conn net.Conn) {
 
 		case "PASS":
 			if s.username == Cfg.Username && arg == Cfg.Password {
-				// Admin login
 				s.loggedIn = true
 				s.send(230, "Login successful")
 			} else {
-				// Sub-user login: look up by username and verify bcrypt hash
 				u := GetUserByUsername(s.username)
 				if u != nil && u.IsActive && CheckPassword(u.PasswordHash, arg) {
 					s.userUUID = u.UUID
-					// Ensure user directory exists
 					EnsureUserDir(u.UUID)
 					s.loggedIn = true
 					s.send(230, "Login successful")
@@ -223,10 +215,8 @@ func handleFTPConn(conn net.Conn) {
 			}
 			s.passiveLn = ln
 			addr := ln.Addr().(*net.TCPAddr)
-			// Use 127.0.0.1 for loopback connections, otherwise use server IP.
 			ip := Cfg.IP
 			if ip == "0.0.0.0" {
-				// Try to get the local IP from the control connection.
 				localAddr := conn.LocalAddr().(*net.TCPAddr)
 				ip = localAddr.IP.String()
 				if ip == "" || ip == "<nil>" {
@@ -279,7 +269,6 @@ func handleFTPConn(conn net.Conn) {
 				if cmd == "NLST" {
 					dataConn.Write([]byte(info.Name() + "\r\n"))
 				} else {
-					// Unix-style listing
 					mode := info.Mode()
 					typeChar := "-"
 					if info.IsDir() {

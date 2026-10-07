@@ -11,13 +11,7 @@ import (
 	"time"
 )
 
-// HandleWebDAV is the main WebDAV handler at /dav/
-// Authentication: HTTP Basic Auth (admin username/password from config, or sub-user creds)
-// Scope: Admin sees public/, sub-user sees public/<uuid>/
 func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
-	// HIGH-2 FIX: Apply brute-force protection before processing Basic Auth.
-	// /login has rate-limiting, but /dav/ was unprotected — attackers could
-	// brute-force admin/user passwords without any throttling.
 	ip := GetClientIP(r)
 	AdminLoginMu.RLock()
 	ban, hasBan := AdminLoginBans[ip]
@@ -29,7 +23,6 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// HTTP Basic Auth
 	username, password, ok := r.BasicAuth()
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="snd-archive WebDAV"`)
@@ -42,7 +35,6 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin {
 		u := GetUserByUsername(username)
 		if u == nil || !u.IsActive || !CheckPassword(u.PasswordHash, password) {
-			// Record failed attempt using same ban logic as /login
 			AdminLoginMu.Lock()
 			b, exists := AdminLoginBans[ip]
 			if !exists {
@@ -64,12 +56,10 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 		davUser = u
 	}
 
-	// Clear failed attempts on successful auth
 	AdminLoginMu.Lock()
 	delete(AdminLoginBans, ip)
 	AdminLoginMu.Unlock()
 
-	// Determine filesystem root for this user
 	var fsRoot string
 	if isAdmin {
 		fsRoot = PublicDir
@@ -81,13 +71,11 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Strip /dav prefix to get the resource path
 	resourcePath := strings.TrimPrefix(r.URL.Path, "/dav")
 	if resourcePath == "" {
 		resourcePath = "/"
 	}
 
-	// Clean and join
 	cleanPath := filepath.Clean(resourcePath)
 	if strings.Contains(cleanPath, "..") {
 		http.Error(w, "Forbidden", http.StatusForbidden)
@@ -95,7 +83,6 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 	}
 	fullPath := filepath.Join(fsRoot, cleanPath)
 
-	// Add WebDAV compliance headers to all responses
 	w.Header().Set("DAV", "1, 2")
 	w.Header().Set("MS-Author-Via", "DAV")
 	w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, PROPPATCH, LOCK, UNLOCK")
@@ -127,14 +114,12 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 		davCopyMove(w, r, fullPath, fsRoot, true)
 
 	case "LOCK":
-		// Return a fake lock (needed for Windows WebDAV write support)
 		davLock(w, r)
 
 	case "UNLOCK":
 		w.WriteHeader(http.StatusNoContent)
 
 	case "PROPPATCH":
-		// Return 207 with success (we don't actually store custom props)
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		w.WriteHeader(http.StatusMultiStatus)
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:"></D:multistatus>`)
@@ -143,8 +128,6 @@ func HandleWebDAV(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
-
-// ─── PROPFIND ────────────────────────────────────────────────────────────────
 
 type davPropfindResp struct {
 	XMLName   xml.Name    `xml:"D:multistatus"`
@@ -163,14 +146,14 @@ type davPropstat struct {
 }
 
 type davProp struct {
-	DisplayName     string        `xml:"D:displayname"`
-	ContentLength   string        `xml:"D:getcontentlength,omitempty"`
-	LastModified    string        `xml:"D:getlastmodified"`
-	ContentType     string        `xml:"D:getcontenttype,omitempty"`
-	ResourceType    *davResType   `xml:"D:resourcetype"`
-	ETag            string        `xml:"D:getetag,omitempty"`
-	CreationDate    string        `xml:"D:creationdate"`
-	SupportedLock   *davSuppLock  `xml:"D:supportedlock"`
+	DisplayName   string       `xml:"D:displayname"`
+	ContentLength string       `xml:"D:getcontentlength,omitempty"`
+	LastModified  string       `xml:"D:getlastmodified"`
+	ContentType   string       `xml:"D:getcontenttype,omitempty"`
+	ResourceType  *davResType  `xml:"D:resourcetype"`
+	ETag          string       `xml:"D:getetag,omitempty"`
+	CreationDate  string       `xml:"D:creationdate"`
+	SupportedLock *davSuppLock `xml:"D:supportedlock"`
 }
 
 type davResType struct {
@@ -208,14 +191,12 @@ func davPropfind(w http.ResponseWriter, r *http.Request, fullPath, resourcePath,
 
 	var responses []davRespEl
 
-	// Add the resource itself
 	href := "/dav" + resourcePath
 	if !strings.HasSuffix(href, "/") && info.IsDir() {
 		href += "/"
 	}
 	responses = append(responses, makeDAVResponse(href, info))
 
-	// If depth=1 and it's a directory, list children
 	if depth != "0" && info.IsDir() {
 		children, err := os.ReadDir(fullPath)
 		if err == nil {
@@ -285,8 +266,6 @@ func makeDAVResponse(href string, info os.FileInfo) davRespEl {
 	}
 }
 
-// ─── GET/HEAD ────────────────────────────────────────────────────────────────
-
 func davGet(w http.ResponseWriter, r *http.Request, fullPath string) {
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -294,7 +273,6 @@ func davGet(w http.ResponseWriter, r *http.Request, fullPath string) {
 		return
 	}
 	if info.IsDir() {
-		// Return simple directory listing XML
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		return
@@ -308,10 +286,7 @@ func davGet(w http.ResponseWriter, r *http.Request, fullPath string) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }
 
-// ─── PUT ─────────────────────────────────────────────────────────────────────
-
 func davPut(w http.ResponseWriter, r *http.Request, fullPath string, u *UserAccount) {
-	// Check quota
 	if u != nil && u.StorageLimit > 0 {
 		used := CalcUserStorage(u.UUID)
 		if used >= u.StorageLimit {
@@ -335,8 +310,6 @@ func davPut(w http.ResponseWriter, r *http.Request, fullPath string, u *UserAcco
 	written, _ := io.Copy(f, r.Body)
 
 	if u != nil {
-		// CalcUserStorage reads the filesystem – compute it before taking the lock
-		// so we don't hold the mutex during disk I/O (data-race fix, bug #3).
 		recalc := CalcUserStorage(u.UUID)
 		UsersMu.Lock()
 		u.UsedStorage = recalc
@@ -353,8 +326,6 @@ func davPut(w http.ResponseWriter, r *http.Request, fullPath string, u *UserAcco
 	_ = written
 }
 
-// ─── DELETE ──────────────────────────────────────────────────────────────────
-
 func davDelete(w http.ResponseWriter, r *http.Request, fullPath string) {
 	err := os.RemoveAll(fullPath)
 	if err != nil {
@@ -363,8 +334,6 @@ func davDelete(w http.ResponseWriter, r *http.Request, fullPath string) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// ─── MKCOL ───────────────────────────────────────────────────────────────────
 
 func davMkcol(w http.ResponseWriter, r *http.Request, fullPath string) {
 	if _, err := os.Stat(fullPath); err == nil {
@@ -382,8 +351,6 @@ func davMkcol(w http.ResponseWriter, r *http.Request, fullPath string) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// ─── COPY/MOVE ───────────────────────────────────────────────────────────────
-
 func davCopyMove(w http.ResponseWriter, r *http.Request, srcPath, fsRoot string, isMove bool) {
 	destHeader := r.Header.Get("Destination")
 	if destHeader == "" {
@@ -391,7 +358,6 @@ func davCopyMove(w http.ResponseWriter, r *http.Request, srcPath, fsRoot string,
 		return
 	}
 
-	// Extract path from full URL in Destination header
 	destURL := destHeader
 	davPrefix := "/dav"
 	if idx := strings.Index(destURL, davPrefix); idx != -1 {
@@ -457,8 +423,6 @@ func copyPath(src, dst string) error {
 	_, err = io.Copy(out, in)
 	return err
 }
-
-// ─── LOCK ────────────────────────────────────────────────────────────────────
 
 func davLock(w http.ResponseWriter, r *http.Request) {
 	lockToken := fmt.Sprintf("urn:uuid:%s", NewUUID())

@@ -1,11 +1,7 @@
 package snd
 
-// ThemeSnippet returns the complete theme system HTML (styles + panel + script)
-// to be embedded just before </body> in any page.
-// pageType: "login" | "account" | "dashboard"
 func ThemeSnippet(pageType string) string {
 	return `
-<!-- ═══════════ THEME SYSTEM ═══════════ -->
 <div id="bgLayerTheme"></div>
 
 <button id="themeTrigger" onclick="themeTogglePanel(event)" title="Customize theme" aria-label="Theme settings">
@@ -129,14 +125,12 @@ func ThemeSnippet(pageType string) string {
 </div>
 
 <style>
-/* ── BG layer ── */
 #bgLayerTheme {
     position: fixed; inset: 0; z-index: -1;
     background-size: cover; background-position: center; background-repeat: no-repeat;
     opacity: 0; transition: opacity 0.4s; pointer-events: none;
 }
 
-/* ── Theme trigger button ── */
 #themeTrigger {
     position: fixed; bottom: 20px; right: 20px; z-index: 400;
     width: 44px; height: 44px; border-radius: 50%;
@@ -151,7 +145,6 @@ func ThemeSnippet(pageType string) string {
 }
 #themeTrigger:hover { transform: scale(1.1) rotate(22deg); background: rgba(40,40,40,0.92); }
 
-/* ── Theme panel ── */
 #themePanel {
     position: fixed; bottom: 74px; right: 16px; z-index: 300;
     width: 296px;
@@ -172,7 +165,6 @@ func ThemeSnippet(pageType string) string {
 .tp-label { font-size: 10px; font-weight: 600; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
 .tp-divider { height: 1px; background: rgba(255,255,255,0.08); margin: 12px 0; }
 
-/* Chips */
 .tp-chips { display: flex; gap: 5px; flex-wrap: wrap; }
 .tp-chip {
     padding: 4px 11px; border-radius: 20px; font-size: 12px; font-weight: 500;
@@ -187,7 +179,6 @@ func ThemeSnippet(pageType string) string {
     border-color: transparent; color: #fff;
 }
 
-/* Color dots */
 .tp-dots { display: flex; gap: 7px; flex-wrap: wrap; }
 .tp-dot {
     width: 24px; height: 24px; border-radius: 50%; cursor: pointer;
@@ -196,7 +187,6 @@ func ThemeSnippet(pageType string) string {
 .tp-dot:hover { transform: scale(1.2); }
 .tp-dot.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,0.22); }
 
-/* Toggle */
 .tp-row { display: flex; align-items: center; justify-content: space-between; }
 .tp-toggle-label { font-size: 13px; color: rgba(255,255,255,0.85); }
 .tp-toggle-sub { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 2px; }
@@ -216,7 +206,6 @@ func ThemeSnippet(pageType string) string {
 }
 .tp-tgl input:checked ~ .tp-tgl-thumb { transform: translateX(18px); }
 
-/* URL input */
 .tp-input {
     width: 100%; padding: 7px 10px; border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.13);
@@ -232,7 +221,6 @@ func ThemeSnippet(pageType string) string {
 }
 .tp-apply-btn:hover { background: rgba(255,255,255,0.18); color: #fff; }
 
-/* Custom palette grid */
 .tp-palette-grid {
     display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
 }
@@ -245,7 +233,6 @@ func ThemeSnippet(pageType string) string {
     border-radius: 6px; background: none; cursor: pointer; padding: 0;
 }
 
-/* ═══ BODY THEME CLASSES ═══ */
 @keyframes rainbowBg {
     0%   { background-position: 0% 50%; }
     50%  { background-position: 100% 50%; }
@@ -259,7 +246,6 @@ body.th-rainbow {
 body.th-dark { background: #0d0d0d !important; color: #ddd !important; }
 body.th-image { background: rgba(0,0,0,0.15) !important; }
 
-/* ═══ LIQUID GLASS — global card/element targets ═══ */
 body.th-liquid .card,
 body.th-liquid .stat-card,
 body.th-liquid .upload-section,
@@ -286,7 +272,6 @@ body.th-liquid.th-dark .stat-card,
 body.th-liquid.th-dark .file-item {
     background: rgba(255,255,255,0.06) !important;
 }
-/* Liquid on its own (default bg) gets a dark gradient automatically */
 body.th-liquid:not(.th-dark):not(.th-rainbow):not(.th-image):not(.th-palette) {
     color: rgba(255,255,255,0.92) !important;
 }
@@ -307,7 +292,6 @@ body.th-liquid .header {
     -webkit-backdrop-filter: blur(20px) saturate(160%) !important;
     border-color: rgba(255,255,255,0.14) !important;
 }
-/* Text on liquid */
 body.th-liquid .info-label,
 body.th-liquid .stat-label,
 body.th-liquid .stat-sub { color: rgba(255,255,255,0.65) !important; }
@@ -341,18 +325,12 @@ body.th-liquid .menu-btn { background: rgba(255,255,255,0.12) !important; border
 body.th-liquid .context-menu { background: rgba(20,20,30,0.92) !important; backdrop-filter: blur(20px) !important; border-color: rgba(255,255,255,0.15) !important; }
 body.th-liquid .context-menu-item { color: rgba(255,255,255,0.8) !important; }
 body.th-liquid .context-menu-item:hover { background: rgba(255,255,255,0.12) !important; }
-/* FIX: backdrop-filter on .file-item creates a new stacking context that traps .context-menu
-   (even at z-index:1000) behind sibling elements. We lift the stacking context so the
-   context-menu can appear above everything else in the document. */
 body.th-liquid .file-item { isolation: auto !important; }
-/* position:fixed escapes the backdrop-filter stacking context; top/right reset to auto so JS can place it precisely */
 body.th-liquid .context-menu { position: fixed !important; z-index: 99999 !important; top: auto !important; right: auto !important; left: auto !important; }
-/* Need a bg for liquid to look good */
 body.th-liquid:not(.th-rainbow):not(.th-dark) {
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%) !important;
 }
 
-/* ═══ DARK THEME ═══ */
 body.th-dark .card,
 body.th-dark .stat-card { background: #181818 !important; border-color: #2a2a2a !important; color: #ccc !important; }
 body.th-dark .header { background: #111 !important; border-color: #2a2a2a !important; }
@@ -366,7 +344,6 @@ body.th-dark .file-item { background: #181818 !important; border-color: #2a2a2a 
 body.th-dark .breadcrumb, body.th-dark [id="breadcrumb"] { background: #111 !important; border-color: #2a2a2a !important; color: #888 !important; }
 body.th-dark .footer { background: #0d0d0d !important; border-color: #2a2a2a !important; color: #555 !important; }
 
-/* ═══ CSS VARS for Custom Palette ═══ */
 body.th-palette {
     background: var(--tp-page-bg, #fafafa) !important;
     color: var(--tp-text, #1a1a1a) !important;
@@ -414,10 +391,8 @@ function applyAll() {
     const body = document.body;
     const bg = document.getElementById('bgLayerTheme');
 
-    // Remove all theme classes
     body.classList.remove('th-rainbow','th-dark','th-image','th-palette','th-liquid');
 
-    // Background
     bg.style.opacity = '0';
     bg.style.backgroundImage = '';
     if (S.bg === 'rainbow') {
@@ -433,10 +408,8 @@ function applyAll() {
         applyPaletteVars();
     }
 
-    // Liquid glass
     if (S.liquid) body.classList.add('th-liquid');
 
-    // Accent color - use CSS custom property so dynamically added elements get it too
     document.documentElement.style.setProperty('--accent-color', S.accent);
     if (!S.liquid) {
         const accentStyle = document.getElementById('_accentStyleTag') || (() => {
@@ -451,7 +424,6 @@ function applyAll() {
         if (t) t.textContent = '';
     }
 
-    // Sync panel UI
     ['default','dark','rainbow','image','palette'].forEach(t => {
         const el = document.getElementById('tpChip' + t.charAt(0).toUpperCase() + t.slice(1));
         if (el) el.classList.toggle('active', t === S.bg);
@@ -461,7 +433,6 @@ function applyAll() {
     const hfToggle = document.getElementById('tpHideFooterToggle');
     if (hfToggle) hfToggle.checked = !!S.hideFooter;
 
-    // Hide/show footer
     document.querySelectorAll('.footer').forEach(function(el) {
         el.style.display = S.hideFooter ? 'none' : '';
     });
@@ -499,7 +470,6 @@ function syncPaletteInputs() {
     });
 }
 
-/* ── Public API ── */
 window.themeSet = function(t) { S.bg = t; saveS(); applyAll(); };
 window.themeApplyImage = function() {
     const url = (document.getElementById('tpBgUrl')||{}).value || '';
@@ -535,6 +505,5 @@ document.addEventListener('click', function(e) {
 
 loadS(); applyAll();
 })();
-</script>
-<!-- ═══════════════════════════════════ -->`
+</script>`
 }

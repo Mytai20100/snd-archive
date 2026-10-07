@@ -14,7 +14,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sub-users always belong in /my — redirect immediately
 	if su := snd.GetSessionUser(r); su != nil {
 		http.Redirect(w, r, "/my", http.StatusSeeOther)
 		return
@@ -27,12 +26,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	uploadSectionDisplay := "none"
 	apiTokenSection := ""
 
-	// Footer + custom CSS
 	footerHTML := ""
 	customCSSTag := ""
 	snd.SiteSettingsMu.RLock()
 	hideFooter := snd.SiteSettingsData.HideFooter
-	customCSS  := snd.SiteSettingsData.CustomCSS
+	customCSS := snd.SiteSettingsData.CustomCSS
 	snd.SiteSettingsMu.RUnlock()
 	if !hideFooter {
 		footerHTML = `<div class="footer">` + snd.Cfg.SiteName + ` v` + snd.VERSION + `</div>`
@@ -48,7 +46,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
                        <a href="/ad" class="btn" data-i18n="nav_admin">Admin</a>
                        <a href="#" onclick="logout(); return false;" class="btn" data-i18n="nav_logout">Logout</a>`
 		uploadSectionDisplay = "block"
-		// CRIT-4 FIX: Only embed Cfg.APIToken for true admin. Sub-users get their own token.
 		var tokenToEmbed string
 		if isAdminUser {
 			tokenToEmbed = snd.Cfg.APIToken
@@ -85,11 +82,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     ` + snd.EmbedLoaderSnippet() + `
     <link rel="stylesheet" href="/css/main.css">
     <style>
-        /* dashboard-specific overrides */
         .upload-section { display: ` + uploadSectionDisplay + `; }
     </style>
     <script>
-        /* Early shim so openDownloadURLModal() is safe to call before dashboard.js loads */
         window._dlUrlPending = false;
         window.openDownloadURLModal = function() { window._dlUrlPending = true; };
     </script>
@@ -148,7 +143,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- View Modal -->
     <div class="modal" id="viewModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -159,7 +153,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Edit Modal -->
     <div class="modal" id="editModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -174,7 +167,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Rename Modal -->
     <div class="modal" id="renameModal">
         <div class="modal-content" style="max-width:500px;">
             <div class="modal-header">
@@ -191,7 +183,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Properties Modal -->
     <div class="modal" id="propsModal">
         <div class="modal-content" style="max-width:480px;">
             <div class="modal-header">
@@ -205,7 +196,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Create Folder Modal -->
     <div class="modal" id="createFolderModal">
         <div class="modal-content" style="max-width:500px;">
             <div class="modal-header">
@@ -223,7 +213,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Download URL Modal -->
  <div class="modal" id="downloadURLModal">
         <div class="modal-content" style="max-width:520px;">
             <div class="modal-header">
@@ -252,7 +241,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
-    <!-- Stream Format Picker Modal -->
     <div class="modal" id="streamFormatModal">
         <div class="modal-content" style="max-width:560px;">
             <div class="modal-header">
@@ -277,24 +265,21 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     <script src="/lib/upload.js" defer></script>
     <script src="/lib/dashboard.js" defer></script>
     <script src="/lib/qr.js" defer></script>
+    <script src="/lib/challenge.js" defer></script>
     <script>
         const isAuthenticated = ` + authStatus + `;
-        // SECURITY FIX: _apiToken is only embedded for authenticated sessions.
-        // Unauthenticated visitors must never see the admin API token, because
-        // it could be used to bypass file-permission checks on private files.
         const _apiToken = ` + func() string {
-	if isAdminUser {
-		return "'" + snd.Cfg.APIToken + "'"
-	}
-	if isAuth {
-		if u := snd.GetSessionUser(r); u != nil {
-			return "'" + u.APIToken + "'"
+		if isAdminUser {
+			return "'" + snd.Cfg.APIToken + "'"
 		}
-	}
-	return "''"
-}() + `;
+		if isAuth {
+			if u := snd.GetSessionUser(r); u != nil {
+				return "'" + u.APIToken + "'"
+			}
+		}
+		return "''"
+	}() + `;
 
-        // --- API Token section ---
         function closeApiTokenSection() {
             const s = document.getElementById('apiTokenSection');
             if (s) { s.style.display = 'none'; localStorage.setItem('hideApiToken','true'); }
@@ -326,32 +311,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             return el ? el.value : _apiToken;
         }
 
-        // Init
         document.addEventListener('DOMContentLoaded', function() {
             initUpload();
             loadFiles();
-            // Flush any early click on Download URL button before scripts loaded
             if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
-            // QR settings embedded server-side so they work for both authenticated and
-            // guest users. Previously this fetched /admin/settings which requires auth,
-            // so unauthenticated visitors never got _qrEnabled=true and the QR button
-            // never appeared in the context menu for public files.
             window._qrEnabled = ` + func() string {
-	snd.SiteSettingsMu.RLock()
-	defer snd.SiteSettingsMu.RUnlock()
-	if snd.SiteSettingsData.AllowQR {
-		return "true"
-	}
-	return "false"
-}() + `;
+		snd.SiteSettingsMu.RLock()
+		defer snd.SiteSettingsMu.RUnlock()
+		if snd.SiteSettingsData.AllowQR {
+			return "true"
+		}
+		return "false"
+	}() + `;
             window._qrLogoURL = ` + func() string {
-	snd.SiteSettingsMu.RLock()
-	defer snd.SiteSettingsMu.RUnlock()
-	if snd.SiteSettingsData.QRLogoURL != "" {
-		return "'" + snd.SiteSettingsData.QRLogoURL + "'"
-	}
-	return "''"
-}() + `;
+		snd.SiteSettingsMu.RLock()
+		defer snd.SiteSettingsMu.RUnlock()
+		if snd.SiteSettingsData.QRLogoURL != "" {
+			return "'" + snd.SiteSettingsData.QRLogoURL + "'"
+		}
+		return "''"
+	}() + `;
         });
     </script>
 ` + snd.ThemeSnippet("dashboard") + `

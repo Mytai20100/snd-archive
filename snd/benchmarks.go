@@ -98,10 +98,10 @@ func HandleBenchmarkCPU(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"test":         "cpu",
-		"duration_ms":  elapsed.Milliseconds(),
-		"iterations":   10000000,
-		"result":       result,
+		"test":        "cpu",
+		"duration_ms": elapsed.Milliseconds(),
+		"iterations":  10000000,
+		"result":      result,
 	})
 }
 
@@ -110,12 +110,12 @@ func HandleBenchmarkMemory(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&m)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"test":            "memory",
-		"alloc_mb":        m.Alloc / 1024 / 1024,
-		"total_alloc_mb":  m.TotalAlloc / 1024 / 1024,
-		"sys_mb":          m.Sys / 1024 / 1024,
-		"num_gc":          m.NumGC,
-		"goroutines":      runtime.NumGoroutine(),
+		"test":           "memory",
+		"alloc_mb":       m.Alloc / 1024 / 1024,
+		"total_alloc_mb": m.TotalAlloc / 1024 / 1024,
+		"sys_mb":         m.Sys / 1024 / 1024,
+		"num_gc":         m.NumGC,
+		"goroutines":     runtime.NumGoroutine(),
 	})
 }
 

@@ -1,9 +1,9 @@
-// dashboard.js
-// Globals expected from inline script: isAuthenticated, _apiToken, addTokenToURL, getAuthToken
+
+
 
 'use strict';
 
-// Language helper — returns translated string or fallback
+
 function _t(key, fallback) { return (window._lang && window._lang[key]) || fallback || key; }
 
 let currentPath = '';
@@ -238,7 +238,7 @@ function downloadSelectedAsZip() {
 
 function loadFiles() {
     const url = currentPath ? '/files?path=' + encodeURIComponent(currentPath) : '/files';
-    // Show skeleton while loading
+    
     const section = document.getElementById('filesSection');
     if (section) section.innerHTML = _skeletonHTML();
     fetch(url)
@@ -284,7 +284,7 @@ function loadFiles() {
                 html += '</div>';
             });
 
-            // Load folder visibility state
+            
             if (isAuthenticated) {
                 folders.forEach(folder => {
                     const fullPath = currentPath ? currentPath + '/' + folder : folder;
@@ -320,7 +320,7 @@ function loadFiles() {
                 html += '<div class="file-item" id="' + safeFileId + '">';
                 html += '<input type="checkbox" class="checkbox file-checkbox" onchange="toggleFileSelect(\'' + esc + '\',this)">';
 
-                // Thumbnail / Icon
+                
                 if (f.type === 'image' || f.type === 'video') {
                     const thumbSrc = '/thumbnail/' + encodeURIComponent(fullFileName);
                     html += '<div class="file-thumb" onclick="openPreviewModal(\'' + esc + '\',\'' + f.type + '\')" style="cursor:pointer;width:72px;height:72px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f0f0f0;">' +
@@ -349,7 +349,7 @@ function loadFiles() {
                 html += '<div class="file-link" onclick="copyLink(\'' + esc + '\',' + isPublic + ')" title="Click to copy">' + escapeHtml(rawUrl) + '</div>';
                 html += '</div>';
 
-                // Actions
+                
                 html += '<div class="file-actions">';
                 html += '<button class="menu-btn" onclick="toggleContextMenu(event,\'' + safeFileId + '\');return false;">⋮</button>';
                 html += '<div class="context-menu" id="menu-' + safeFileId + '">';
@@ -359,8 +359,8 @@ function loadFiles() {
                     html += '<div class="context-menu-item" onclick="editFile(\'' + esc + '\')">'+_t('ctx_edit','Edit')+'</div>';
                 }
                 html += '<div class="context-menu-item" onclick="copyLink(\'' + esc + '\',' + isPublic + ')">'+_t('ctx_copy_link','Copy link')+'</div>';
-                // Direct download via /download/ which sets Content-Disposition:attachment.
-                // Public files use ?pt= token so guests can download without an API token.
+                
+                
                 (function(){
                     var dlUrl;
                     if (isPublic && f.public_token) {
@@ -385,7 +385,7 @@ function loadFiles() {
 
             section.innerHTML = html;
 
-            // When unauthenticated: also load user public files and append them
+            
             if (!isAuthenticated && !currentPath) {
                 _loadUserPublicSection(section);
             }
@@ -396,12 +396,12 @@ function loadFiles() {
         });
 }
 
-// Fetch /public-files and append user-contributed public files below admin files
+
 function _loadUserPublicSection(section) {
     fetch('/public-files')
         .then(r => r.json())
         .then(entries => {
-            // Filter only user files (have user_uuid)
+            
             const userFiles = (entries || []).filter(f => !!f.user_uuid);
             if (!userFiles.length) return;
 
@@ -473,14 +473,14 @@ setPreviewFilesUserPub(userFiles);
             html += '</div>';
             section.innerHTML += html;
         })
-        .catch(() => {}); // silent fail — user files are optional
+        .catch(() => {}); 
 }
 
 function togglePublicSwitch(filename, isPublic) {
     fetch('/set-permission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, is_public: isPublic }) })
         .then(r => r.json())
         .then(d => {
-            // Update the cached allFiles entry with the new public_token so copyLink works immediately
+            
             const f = allFiles.find(x => x.name === filename || x.name === filename.split('/').pop());
             if (f) { f.is_public = isPublic; f.public_token = isPublic ? (d.public_token || '') : ''; }
             showToast(filename + ' is now ' + (isPublic ? 'PUBLIC' : 'PRIVATE'), 'success');
@@ -492,7 +492,7 @@ function copyLink(filename, isPublic) {
     const base = window.location.origin + '/raw/' + encodeURIComponent(filename);
     let url;
     if (isPublic) {
-        // Look up public_token from allFiles cache
+        
         const f = allFiles.find(x => x.name === filename || x.name === filename.split('/').pop());
         const pt = f && f.public_token ? f.public_token : '';
         url = pt ? base + '?pt=' + encodeURIComponent(pt) : base;
@@ -782,8 +782,8 @@ function showZipPasswordModal(filename, wrongPassword) {
     setTimeout(() => { const inp = document.getElementById('zip-pw-input'); if (inp) inp.focus(); }, 50);
 }
 
-// Queue tracks all in-progress and completed downloads so the modal stays open.
-var _dlQueue = []; // [{id, url, filename, status, pct, error}]
+
+var _dlQueue = []; 
 var _dlQueueIdSeq = 0;
 
 function openDownloadURLModal() {
@@ -794,7 +794,7 @@ function openDownloadURLModal() {
     setTimeout(function() { if (inp) inp.focus(); }, 50);
     _renderDlQueue();
 }
-// Flush any click that happened before this script loaded
+
 document.addEventListener('DOMContentLoaded', function() {
     if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
 });
@@ -832,7 +832,7 @@ function _dlAdminUrlHint(val) {
     hint.style.display = _isStreamingURL(val.trim()) ? '' : 'none';
 }
 
-// ── Streaming platform detection ─────────────────────────────────────────────
+
 var _streamingHosts = [
     'youtube.com','youtu.be','vimeo.com','dailymotion.com','twitch.tv',
     'tiktok.com','instagram.com','facebook.com','fb.watch',
@@ -847,7 +847,7 @@ function _isStreamingURL(url) {
     } catch(e) { return false; }
 }
 
-// Pending stream download URL (used by format picker)
+
 var _pendingStreamURL = '';
 
 async function confirmDownloadURL() {
@@ -858,7 +858,7 @@ async function confirmDownloadURL() {
         return;
     }
 
-    // If it's a streaming platform URL, show the format picker instead
+    
     if (_isStreamingURL(url)) {
         if (inp) inp.value = '';
         closeModal('downloadURLModal');
@@ -873,7 +873,7 @@ async function confirmDownloadURL() {
     _dlQueue.push(job);
     _renderDlQueue();
 
-    // Indeterminate pulse while server fetches
+    
     const pulseTimer = setInterval(function() {
         if (job.status === 'pending') _renderDlQueue();
     }, 800);
@@ -908,14 +908,14 @@ async function confirmDownloadURL() {
         showToast(_t('toast_error_network','Network error') + ': ' + e.message, 'error');
     }
     _renderDlQueue();
-    // Auto-clean completed/failed entries after 8 s
+    
     setTimeout(function() {
         _dlQueue = _dlQueue.filter(function(j) { return j.id !== id; });
         _renderDlQueue();
     }, 8000);
 }
 
-// ── Stream Format Picker ──────────────────────────────────────────────────────
+
 async function _showStreamFormatPicker(url) {
     _pendingStreamURL = url;
     const modal = document.getElementById('streamFormatModal');
@@ -946,7 +946,7 @@ async function _showStreamFormatPicker(url) {
             return;
         }
 
-        // Show thumbnail + title
+        
         if (info.title) titleEl.textContent = info.title;
         infoEl.innerHTML =
             (info.thumbnail ? '<img src="' + escapeHtml(info.thumbnail) + '" style="width:80px;height:52px;object-fit:cover;border-radius:4px;flex-shrink:0;">' : '') +
@@ -954,10 +954,10 @@ async function _showStreamFormatPicker(url) {
             (info.uploader ? '<div style="font-size:12px;color:#888;margin-top:2px;">by ' + escapeHtml(info.uploader) + '</div>' : '') +
             (info.duration  ? '<div style="font-size:12px;color:#888;">' + _fmtDuration(info.duration) + '</div>' : '') + '</div>';
 
-        // Build format list grouped: video+audio first, then audio-only, then other
+        
         var fmts = (info.formats || []).filter(function(f) { return f.ext && f.ext !== 'none'; });
 
-        // Deduplicate / pick best per resolution
+        
         var seen = {}; var best = [];
         fmts.forEach(function(f) {
             var key = (f.height || 0) + '_' + f.ext + '_' + (f.vcodec && f.vcodec !== 'none' ? 'v' : 'a');
@@ -966,7 +966,7 @@ async function _showStreamFormatPicker(url) {
         Object.values(seen).forEach(function(f) { best.push(f); });
         best.sort(function(a,b) { return (b.height||0) - (a.height||0) || (b.tbr||0) - (a.tbr||0); });
 
-        // Add a "best quality" auto option at the top
+        
         var rows = '<div style="padding:8px 0;border-bottom:1px solid #f0f0f0;">' +
             '<button onclick="_doStreamDownload(\'bestvideo+bestaudio/best\')" style="width:100%;text-align:left;background:none;border:1px solid #1a73e8;border-radius:4px;padding:10px 12px;cursor:pointer;font-size:13px;color:#1a73e8;font-weight:600;">' +
             'Best quality (auto-merge)</button></div>';
@@ -1001,7 +1001,7 @@ async function _doStreamDownload(formatId) {
     const job = { id, url, filename: 'Downloading…', status: 'pending', pct: null, error: null };
     _dlQueue.push(job);
 
-    // Re-open download URL modal to show queue progress
+    
     const dlModal = document.getElementById('downloadURLModal');
     if (dlModal) dlModal.style.display = 'flex';
     _renderDlQueue();
@@ -1102,8 +1102,8 @@ function copyLinkUserPub(url) {
     navigator.clipboard.writeText(url).then(() => showToast(_t('toast_copied','Link copied!'),'success')).catch(() => showToast(_t('toast_error_copy','Failed to copy'),'error'));
 }
 
-// Generate QR for a user-public file given its full public URL.
-// No API token is embedded — the URL already contains pt= if needed.
+
+
 function generateQRUserPub(publicUrl, encodedPT) {
     var url = publicUrl;
     if (encodedPT && publicUrl.indexOf('pt=') === -1) {
@@ -1120,7 +1120,7 @@ function generateQRUserPub(publicUrl, encodedPT) {
     }
 }
 
-// Index-based helpers — avoid quote escaping issues in html string building
+
 function _dlZipUserPub(idx) {
     var f = _userPubFiles && _userPubFiles[idx];
     if (!f) return;
@@ -1138,8 +1138,8 @@ function _qrUserPub(idx) {
 }
 
 function downloadAsZipUserPub(relFilename) {
-    // relFilename is now the relative filename (e.g. "photo.png"), not a full URL.
-    // Passed from the updated context menu patch.
+    
+    
     const displayName = relFilename.split('/').pop() || 'file';
     showToast('Preparing ZIP\u2026','success');
     fetch('/zip-multiple', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ files: [relFilename] }) })

@@ -4,18 +4,15 @@ import (
 	"crypto/subtle"
 
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// tokenEqual does constant-time comparison to prevent timing attacks.
 func tokenEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// RequireAdmin ensures only the admin account (or sub-users with IsAdmin=true) can access the handler.
 func RequireAdmin(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		session := getValidSession(r)
@@ -23,7 +20,6 @@ func RequireAdmin(handler http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/ac", http.StatusSeeOther)
 			return
 		}
-		// True admin OR sub-user with IsAdmin flag
 		isAdminAccess := session.IsAdmin
 		if !isAdminAccess && session.UserUUID != "" {
 			if u := GetUserByUUID(session.UserUUID); u != nil && u.IsAdmin {
@@ -39,7 +35,6 @@ func RequireAdmin(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireAuth allows both admin and active sub-users.
 func RequireAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		session := getValidSession(r)
@@ -52,7 +47,6 @@ func RequireAuth(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireToken validates admin API token only.
 func RequireToken(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filename := ExtractFilename(r.URL.Path)
@@ -75,57 +69,79 @@ func RequireToken(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// RequireTokenOrAuth allows public files (with valid pt= public token), token holders (admin or user), or logged-in sessions.
+func resourcePathFromRequest(r *http.Request) (fullPath, fileKey, folderKey string) {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/view/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/view/")
+	case strings.HasPrefix(r.URL.Path, "/download/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/download/")
+	case strings.HasPrefix(r.URL.Path, "/stream/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/stream/")
+	case strings.HasPrefix(r.URL.Path, "/embed/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/embed/")
+	case strings.HasPrefix(r.URL.Path, "/raw/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/raw/")
+	case strings.HasPrefix(r.URL.Path, "/api/view/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/api/view/")
+	case strings.HasPrefix(r.URL.Path, "/thumbnail/"):
+		fullPath = strings.TrimPrefix(r.URL.Path, "/thumbnail/")
+	default:
+		fullPath = r.URL.Path
+	}
+
+	folderPath := filepath.Dir(fullPath)
+	if folderPath == "." {
+		folderPath = ""
+	}
+
+	fileKey = fullPath
+	folderKey = folderPath
+	if uuid := r.URL.Query().Get("u"); uuid != "" {
+		fileKey = uuid + "/" + fullPath
+		if folderPath != "" {
+			folderKey = uuid + "/" + folderPath
+		} else {
+			folderKey = uuid + "/"
+		}
+	}
+	return fullPath, fileKey, folderKey
+}
+
+func resourceIsPublic(r *http.Request) bool {
+	_, fileKey, folderKey := resourcePathFromRequest(r)
+	PermissionMu.RLock()
+	filePerm, fileExists := FilePermissions[fileKey]
+	folderPerm, folderExists := FolderPermissions[folderKey]
+	PermissionMu.RUnlock()
+	return (fileExists && filePerm.IsPublic) || (folderExists && folderPerm.IsPublic)
+}
+
+func requestAPIToken(r *http.Request) string {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		token = r.Header.Get("X-API-Token")
+	}
+	return token
+}
+
+func requestHasValidAPIToken(r *http.Request) bool {
+	token := requestAPIToken(r)
+	if token == "" {
+		return false
+	}
+	return tokenEqual(token, Cfg.APIToken) || GetUserByToken(token) != nil
+}
+
 func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var fullPath string
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/view/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/view/")
-		case strings.HasPrefix(r.URL.Path, "/download/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/download/")
-		case strings.HasPrefix(r.URL.Path, "/stream/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/stream/")
-		case strings.HasPrefix(r.URL.Path, "/embed/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/embed/")
-		case strings.HasPrefix(r.URL.Path, "/raw/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/raw/")
-		case strings.HasPrefix(r.URL.Path, "/api/view/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/api/view/")
-		case strings.HasPrefix(r.URL.Path, "/thumbnail/"):
-			fullPath = strings.TrimPrefix(r.URL.Path, "/thumbnail/")
-		default:
-			fullPath = r.URL.Path
-		}
-
-		folderPath := filepath.Dir(fullPath)
-		if folderPath == "." {
-			folderPath = ""
-		}
-
-		// If ?u= is present, this is a user-scoped file — look up permissions under uuid/ prefix.
-		fileKey := fullPath
-		folderKey := folderPath
-		if uuid := r.URL.Query().Get("u"); uuid != "" {
-			fileKey = uuid + "/" + fullPath
-			if folderPath != "" {
-				folderKey = uuid + "/" + folderPath
-			} else {
-				folderKey = uuid + "/"
-			}
-		}
+		_, fileKey, folderKey := resourcePathFromRequest(r)
 
 		PermissionMu.RLock()
 		filePerm, fileExists := FilePermissions[fileKey]
 		folderPerm, folderExists := FolderPermissions[folderKey]
 		PermissionMu.RUnlock()
 
-		// Logged-in or API-token holders bypass public-token check entirely.
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			token = r.Header.Get("X-API-Token")
-		}
-		if tokenEqual(token, Cfg.APIToken) || GetUserByToken(token) != nil {
+		if requestHasValidAPIToken(r) {
 			handler(w, r)
 			return
 		}
@@ -135,15 +151,11 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Anonymous access: allow if file or folder is marked public.
-		// pt= token is accepted as an optional extra-validation mechanism but is
-		// not required — a file set to PUBLIC is always accessible by direct URL.
 		pt := r.URL.Query().Get("pt")
 
 		fileIsPublic := fileExists && filePerm.IsPublic
 		folderIsPublic := folderExists && folderPerm.IsPublic
 
-		// If a pt= token is provided, validate it for extra security; accept if it matches.
 		if pt != "" {
 			if fileIsPublic && filePerm.PublicToken != "" && tokenEqual(pt, filePerm.PublicToken) {
 				handler(w, r)
@@ -155,7 +167,6 @@ func RequireTokenOrAuth(handler http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// No pt= required: if the file/folder is public, allow direct access.
 		if fileIsPublic || folderIsPublic {
 			handler(w, r)
 			return
@@ -173,24 +184,6 @@ func ObfuscateHandler(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func CfChallengeMiddleware(handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("cf_passed")
-		if err != nil || cookie.Value != "true" {
-			// FIX: preserve full path + query string for proper redirect after challenge
-			returnPath := r.URL.Path
-			if r.URL.RawQuery != "" {
-				returnPath += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
-			return
-		}
-		handler(w, r)
-	}
-}
-
-// ─── Session helpers ─────────────────────────────────────────────────────────
-
 func getValidSession(r *http.Request) *SessionInfo {
 	cookie, err := r.Cookie("session")
 	if err != nil || cookie.Value == "" {
@@ -205,8 +198,6 @@ func getValidSession(r *http.Request) *SessionInfo {
 	return session
 }
 
-// GetSessionUser returns the UserAccount for a user session.
-// Returns nil only for the true admin account (no UserUUID) or unauthenticated.
 func GetSessionUser(r *http.Request) *UserAccount {
 	session := getValidSession(r)
 	if session == nil || session.UserUUID == "" {
@@ -215,17 +206,14 @@ func GetSessionUser(r *http.Request) *UserAccount {
 	return GetUserByUUID(session.UserUUID)
 }
 
-// GetSessionInfo returns raw session info.
 func GetSessionInfo(r *http.Request) *SessionInfo {
 	return getValidSession(r)
 }
 
-// IsAuthenticated returns true for any valid session (admin or user).
 func IsAuthenticated(r *http.Request) bool {
 	return getValidSession(r) != nil
 }
 
-// IsAdminAuthenticated returns true for admin sessions or sub-users with IsAdmin=true.
 func IsAdminAuthenticated(r *http.Request) bool {
 	session := getValidSession(r)
 	if session == nil {
@@ -242,32 +230,10 @@ func IsAdminAuthenticated(r *http.Request) bool {
 	return false
 }
 
-// IsAuthenticatedForUser returns true if the session belongs to the specified user OR admin.
 func IsAuthenticatedForUser(r *http.Request, uuid string) bool {
 	session := getValidSession(r)
 	if session == nil {
 		return false
 	}
 	return session.IsAdmin || session.UserUUID == uuid
-}
-
-// RequireTokenOrChallenge wraps a handler so that:
-//   - Requests carrying a valid API token (admin or user) bypass the CF challenge —
-//     this preserves automation and direct-link use-cases.
-//   - All other requests must pass the CF challenge before reaching the handler.
-//
-// HIGH-9 FIX: Without this wrapper the CF challenge only protected / and /my,
-// so bots could directly call /download/, /view/, /stream/, etc. without
-// ever seeing the challenge page.
-func RequireTokenOrChallenge(cf func(http.HandlerFunc) http.HandlerFunc, handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("token")
-		if token != "" && (tokenEqual(token, Cfg.APIToken) || GetUserByToken(token) != nil) {
-			// Valid token — skip the challenge entirely.
-			handler(w, r)
-			return
-		}
-		// No valid token — must pass the CF challenge first.
-		cf(handler)(w, r)
-	}
 }

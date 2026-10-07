@@ -3,15 +3,12 @@ package snd
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-// formatDuration returns a human-readable ban duration string.
 func formatDuration(d time.Duration) string {
 	switch {
 	case d >= 30*24*time.Hour:
@@ -34,13 +31,12 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Username  string `json:"username"`
 		Password  string `json:"password"`
 		TwoFACode string `json:"twofa_code,omitempty"`
+		WebRTCIP  string `json:"webrtc_ip,omitempty"`
 	}
 	json.NewDecoder(r.Body).Decode(&creds)
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// ── Admin brute-force protection ─────────────────────────────────────────
-	// Only applied when the submitted username matches the admin username.
 	if creds.Username == Cfg.Username {
 		ip := GetClientIP(r)
 		AdminLoginMu.Lock()
@@ -49,7 +45,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			ban = &AdminLoginBan{}
 			AdminLoginBans[ip] = ban
 		}
-		// Check if currently banned.
 		if time.Now().Before(ban.BanExpires) {
 			remaining := time.Until(ban.BanExpires).Round(time.Second)
 			AdminLoginMu.Unlock()
@@ -67,7 +62,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	var loginUser *UserAccount
 
 	if !isAdmin {
-		// Wrong credentials — check if it's an admin username attempt.
 		if creds.Username == Cfg.Username {
 			ip := GetClientIP(r)
 			AdminLoginMu.Lock()
@@ -99,8 +93,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Non-admin user login.
-		// L2 FIX: Apply the same brute-force rate-limit to sub-user accounts.
 		ip := GetClientIP(r)
 		userBanKey := ip + ":" + creds.Username
 		UserLoginMu.Lock()
@@ -123,7 +115,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 		u := GetUserByUsername(creds.Username)
 		if u == nil || !u.IsActive || !CheckPassword(u.PasswordHash, creds.Password) {
-			// Record the failure and possibly ban.
 			UserLoginMu.Lock()
 			userBan.FailCount++
 			d := BanLevel(userBan.FailCount)
@@ -138,14 +129,12 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Successful sub-user login — clear ban record.
 		UserLoginMu.Lock()
 		delete(UserLoginBans, userBanKey)
 		UserLoginMu.Unlock()
 		loginUser = u
 	}
 
-	// Successful admin login — clear ban record.
 	if isAdmin {
 		ip := GetClientIP(r)
 		AdminLoginMu.Lock()
@@ -153,7 +142,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		AdminLoginMu.Unlock()
 	}
 
-	// 2FA only applies to admin
 	if isAdmin && Cfg.Enable2FA {
 		if creds.TwoFACode == "" {
 			code := GenerateRandomToken(16)
@@ -202,22 +190,23 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		TwoFAMu.Unlock()
 	}
 
-	// FIX: Use crypto/rand for session ID (was time.Now().UnixNano())
 	sessionID := GenerateRandomToken(32)
 	ip := GetClientIP(r)
+	webrtcIP := NormalizeWebRTCIP(creds.WebRTCIP)
 	ua := r.UserAgent()
 	osName, browser := ParseUserAgent(ua)
 
 	session := &SessionInfo{
 		SessionID:  sessionID,
 		IP:         ip,
+		WebRTCIP:   webrtcIP,
 		UserAgent:  ua,
 		OS:         osName,
 		Browser:    browser,
 		LoginTime:  time.Now(),
 		LastAccess: time.Now(),
 		ExpiresAt:  time.Now().Add(24 * time.Hour),
-		IsAdmin:    isAdmin, // only true admin account gets IsAdmin=true
+		IsAdmin:    isAdmin,
 	}
 	if loginUser != nil {
 		session.UserUUID = loginUser.UUID
@@ -227,10 +216,7 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	Sessions[sessionID] = session
 	SessionMu.Unlock()
 
-	// FIX: Set Secure only if connection is actually over TLS.
-	// Using Cfg.UseHTTPS here would break HTTP sessions because
-	// browsers refuse to send Secure cookies over plain HTTP.
-	isHTTPS := r.TLS != nil
+	isHTTPS := requestIsHTTPS(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    sessionID,
@@ -241,7 +227,7 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 	})
 
-	LogAccess(ip, "login", "/login", ua)
+	LogAccess(ip, "login", "/login", ua, webrtcIP)
 
 	redirectTo := "/"
 	if loginUser != nil {
@@ -251,7 +237,6 @@ func HandleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
-	// FIX: Invalidate server-side session on logout
 	cookie, err := r.Cookie("session")
 	if err == nil && cookie.Value != "" {
 		SessionMu.Lock()
@@ -275,6 +260,7 @@ func HandleSessions(w http.ResponseWriter, r *http.Request) {
 	type SessionDisplay struct {
 		SessionID  string `json:"session_id"`
 		IP         string `json:"ip"`
+		WebRTCIP   string `json:"webrtc_ip,omitempty"`
 		Username   string `json:"username"`
 		OS         string `json:"os"`
 		Browser    string `json:"browser"`
@@ -300,6 +286,7 @@ func HandleSessions(w http.ResponseWriter, r *http.Request) {
 		sessionList = append(sessionList, SessionDisplay{
 			SessionID:  sid,
 			IP:         s.IP,
+			WebRTCIP:   s.WebRTCIP,
 			Username:   username,
 			OS:         s.OS,
 			Browser:    s.Browser,
@@ -321,15 +308,12 @@ func HandleKickSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// C2 FIX: Determine whether the caller is the true admin (no UserUUID).
 	callerSession := GetSessionInfo(r)
 	callerIsTrueAdmin := callerSession != nil && callerSession.IsAdmin && callerSession.UserUUID == ""
 
 	SessionMu.Lock()
 	target, exists := Sessions[req.SessionID]
 	if exists {
-		// Only the true admin may kick another admin session.
-		// Sub-users with IsAdmin=true cannot kick real-admin sessions.
 		targetIsAdmin := target.IsAdmin && target.UserUUID == ""
 		if targetIsAdmin && !callerIsTrueAdmin {
 			SessionMu.Unlock()
@@ -378,160 +362,4 @@ func send2FACodeToDiscord(username string, code string) error {
 		return fmt.Errorf("Discord webhook failed with status: %d", resp.StatusCode)
 	}
 	return nil
-}
-
-// isSafeRedirectPath validates that a redirect path is a relative path only.
-func isSafeRedirectPath(p string) bool {
-	if p == "" {
-		return false
-	}
-	u, err := url.Parse(p)
-	if err != nil || u.Scheme != "" || u.Host != "" {
-		return false
-	}
-	return strings.HasPrefix(p, "/")
-}
-
-// HandleCFChallenge dispatches GET (show widget) and POST (verify token).
-// HIGH-8 FIX: replaced the old unconditional-cookie fake challenge with real
-// Cloudflare Turnstile verification.  A bot that simply GETs /cf-challenge and
-// replays the Set-Cookie header will no longer receive a cf_passed cookie,
-// because the cookie is only issued after the Turnstile token is verified
-// server-side against https://challenges.cloudflare.com/turnstile/v0/siteverify.
-func HandleCFChallenge(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		handleCFChallengeVerify(w, r)
-	} else {
-		handleCFChallengeGET(w, r)
-	}
-}
-
-// handleCFChallengeGET renders the Turnstile challenge widget.
-// If no site key is configured, it falls back to the old spinner page so that
-// the server remains usable even without Turnstile credentials set up.
-func handleCFChallengeGET(w http.ResponseWriter, r *http.Request) {
-	returnPath := r.URL.Query().Get("return")
-	if !isSafeRedirectPath(returnPath) {
-		returnPath = "/"
-	}
-	safeReturn := html.EscapeString(returnPath)
-
-	SiteSettingsMu.RLock()
-	siteKey := SiteSettingsData.TurnstileSiteKey
-	SiteSettingsMu.RUnlock()
-
-	var pageHTML string
-	if siteKey == "" {
-		// Fallback: Turnstile not configured — show a notice instead of silently
-		// granting access.  Admin should configure TurnstileSiteKey + TurnstileSecretKey
-		// in Settings to enable real verification.
-		pageHTML = `<!DOCTYPE html>
-<html>
-<head><title>Challenge not configured</title>
-<style>body{font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fafafa;}
-.box{text-align:center;background:white;padding:40px;border:1px solid #e0e0e0;max-width:500px;border-radius:4px;}
-p{color:#666;font-size:14px;}</style></head>
-<body><div class="box">
-<h2>Browser check unavailable</h2>
-<p>Cloudflare Turnstile is not configured on this server.<br>
-Contact the administrator to set up <strong>turnstile_site_key</strong> and <strong>turnstile_secret_key</strong> in Settings.</p>
-</div></body></html>`
-	} else {
-		pageHTML = `<!DOCTYPE html>
-<html>
-<head>
-    <title>Checking your browser</title>
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    <style>
-        body { font-family: -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; }
-        .challenge-box { text-align: center; background: white; padding: 40px; border: 1px solid #e0e0e0; max-width: 500px; border-radius: 4px; }
-        h2 { margin-bottom: 24px; }
-        p { color: #666; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="challenge-box">
-        <h2>Checking your browser</h2>
-        <form method="POST" action="/cf-challenge" id="cf-form">
-            <div class="cf-turnstile"
-                 data-sitekey="` + html.EscapeString(siteKey) + `"
-                 data-callback="onTurnstileSuccess"></div>
-            <input type="hidden" name="return" value="` + safeReturn + `">
-        </form>
-        <p>Completing this check confirms you are a human.</p>
-    </div>
-    <script>
-        function onTurnstileSuccess(token) {
-            document.getElementById('cf-form').submit();
-        }
-    </script>
-</body>
-</html>`
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(pageHTML))
-}
-
-// handleCFChallengeVerify receives the POST from the Turnstile widget, verifies
-// the cf-turnstile-response token with Cloudflare's siteverify API, and — only
-// on success — issues the cf_passed cookie and redirects the user onward.
-func handleCFChallengeVerify(w http.ResponseWriter, r *http.Request) {
-	returnPath := r.FormValue("return")
-	if !isSafeRedirectPath(returnPath) {
-		returnPath = "/"
-	}
-
-	SiteSettingsMu.RLock()
-	siteKey    := SiteSettingsData.TurnstileSiteKey
-	secretKey  := SiteSettingsData.TurnstileSecretKey
-	SiteSettingsMu.RUnlock()
-
-	// If keys are not configured, deny — do not fall back to granting access.
-	if siteKey == "" || secretKey == "" {
-		http.Error(w, "Challenge not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	token := r.FormValue("cf-turnstile-response")
-	if token == "" {
-		// No token submitted — send back to challenge page.
-		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
-		return
-	}
-
-	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify",
-		url.Values{
-			"secret":   {secretKey},
-			"response": {token},
-			"remoteip": {GetClientIP(r)},
-		})
-	if err != nil {
-		log.Printf("[CF-CHALLENGE] siteverify request failed: %v", err)
-		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
-		return
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Success bool `json:"success"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || !result.Success {
-		// Failed verification — redirect back to challenge (do NOT set cookie).
-		http.Redirect(w, r, "/cf-challenge?return="+url.QueryEscape(returnPath), http.StatusSeeOther)
-		return
-	}
-
-	// Verified — issue the cf_passed cookie and redirect.
-	isHTTPS := r.TLS != nil
-	http.SetCookie(w, &http.Cookie{
-		Name:     "cf_passed",
-		Value:    "true",
-		Path:     "/",
-		MaxAge:   86400,
-		HttpOnly: true,
-		Secure:   isHTTPS,
-		SameSite: http.SameSiteLaxMode,
-	})
-	http.Redirect(w, r, returnPath, http.StatusSeeOther)
 }

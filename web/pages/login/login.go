@@ -53,7 +53,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
             border-left: 3px solid #d32f2f; font-size: 13px; color: #c62828;
             display: none; border-radius: 0 4px 4px 0;
         }
-        /* Liquid glass overrides */
         body.th-liquid .login-box {
             background: rgba(255,255,255,0.10) !important;
             backdrop-filter: blur(32px) saturate(200%) brightness(1.08) !important;
@@ -84,7 +83,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
         <label for="twofa">2FA Code</label>
         <input type="text" id="twofa" placeholder="Enter 2FA code from Discord">
     </div>
-    <button class="submit-btn" id="submitBtn" onclick="login()">Sign in</button>
+    <button class="submit-btn" id="submitBtn" onclick="loginWithWebRTC()">Sign in</button>
     <div class="twofa-notice" id="twofaNotice"></div>
     <div class="error-msg" id="errorMsg"></div>
 </div>

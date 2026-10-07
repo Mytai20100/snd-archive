@@ -1,9 +1,9 @@
-// userdash.js
-// Globals expected: USER_UUID, USER_TOKEN, addTokenToURL, makePublicURL, makePrivateURL
+
+
 
 'use strict';
 
-// Language helper — returns translated string or fallback
+
 function _t(key, fallback) { return (window._lang && window._lang[key]) || fallback || key; }
 
 let currentPath   = '';
@@ -141,7 +141,7 @@ function jumpToItem(name) {
 function selectAllFiles() {
     if (!bulkMode) { bulkMode = true; document.getElementById('bulkActions').classList.add('active'); }
     selectedFiles.clear();
-    // Use fullFileName (with currentPath prefix) — same as what toggleFileSelect receives
+    
     allFiles.forEach(f => {
         const fullFileName = currentPath ? currentPath + '/' + f.name : f.name;
         selectedFiles.add(fullFileName);
@@ -245,7 +245,7 @@ function loadFiles() {
             html += '<div class="context-menu-item danger" onclick="deleteFolder(\'' + escapedFP + '\')">'+_t('ctx_delete_folder','Delete Folder')+'</div>';
             html += '</div></div></div>';
         });
-        // Load folder toggle state
+        
         allFolders.forEach(folder => {
             const fullPath = currentPath ? currentPath + '/' + folder : folder;
             const safeId   = 'snd-item-' + folder.replace(/[^a-zA-Z0-9]/g, '_');
@@ -310,7 +310,7 @@ function loadFiles() {
 function togglePublicSwitch(filename, isPublic) {
     fetch('/set-permission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, is_public: isPublic }) })
         .then(r => r.json()).then(d => {
-            // Update cached allFiles entry so copyLink can use the new token immediately
+            
             const f = allFiles.find(x => (currentPath ? currentPath + '/' + x.name : x.name) === filename || x.name === filename);
             if (f) { f.is_public = isPublic; f.public_token = isPublic ? (d.public_token || '') : ''; }
             showToast(filename + ' is now ' + (isPublic ? 'PUBLIC' : 'PRIVATE'), 'success'); loadFiles();
@@ -454,7 +454,7 @@ function toggleFolderPublic(folderPath, isPublic) {
         .then(r => r.json()).then(d => {
             showToast(folderPath.split('/').pop() + ' is now ' + (isPublic ? 'PUBLIC' : 'PRIVATE'), 'success');
             if (isPublic && d.public_token) {
-                // Build and copy the public folder link with pt= token
+                
                 const folderLink = makePublicURL(folderPath, d.public_token);
                 navigator.clipboard.writeText(folderLink).catch(() => {});
             }
@@ -531,44 +531,9 @@ function openSettingsPanel() {
         if (themeRow) themeRow.style.display = data.allow_theme ? '' : 'none';
         if (document.getElementById('us-theme')) document.getElementById('us-theme').value = s.theme || 'default';
 
-        // MCP section — only shown when admin allows user MCP
-        const mcpSec = document.getElementById('us-mcp-section');
-        if (mcpSec) {
-            mcpSec.style.display = data.allow_mcp ? '' : 'none';
-            if (data.allow_mcp) {
-                const mcp = s.mcp || {};
-                const mcpEnabled = document.getElementById('us-mcp-enabled');
-                const mcpPerms   = document.getElementById('us-mcp-perms');
-                if (mcpEnabled) {
-                    mcpEnabled.checked = !!mcp.enabled;
-                    if (mcpPerms) mcpPerms.style.display = mcp.enabled ? '' : 'none';
-                    mcpEnabled.onchange = function() {
-                        if (mcpPerms) mcpPerms.style.display = this.checked ? '' : 'none';
-                    };
-                }
-                const mp   = mcp.permissions || {};
-                const maxP = data.mcp_max_perms || {};
-                _udLoadMcpPerm('us-mcp-perm-read',    mp.can_read,    maxP.can_read);
-                _udLoadMcpPerm('us-mcp-perm-upload',  mp.can_upload,  maxP.can_upload);
-                _udLoadMcpPerm('us-mcp-perm-create',  mp.can_create,  maxP.can_create);
-                _udLoadMcpPerm('us-mcp-perm-rename',  mp.can_rename,  maxP.can_rename);
-                _udLoadMcpPerm('us-mcp-perm-delete',  mp.can_delete,  maxP.can_delete);
-                _udLoadMcpPerm('us-mcp-perm-storage', mp.can_storage, maxP.can_storage);
-            }
-        }
-
         openModal('settingsModal');
         if (s.bg_music_url) applyUserBgMusic(s.bg_music_url);
     }).catch(() => showToast(_t('toast_error_load_settings','Failed to load settings'), 'error'));
-}
-
-function _udLoadMcpPerm(id, val, adminMax) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.checked = !!val;
-    el.disabled = !adminMax;
-    el.parentElement.style.opacity = adminMax ? '' : '0.4';
-    el.parentElement.title = adminMax ? '' : 'Not allowed by admin';
 }
 
 function closeSettingsModal() { document.getElementById('settingsModal').style.display = 'none'; }
@@ -580,20 +545,7 @@ async function saveUserSettings() {
         background_url:    document.getElementById('us-bg').value,
         bg_music_url:      document.getElementById('us-music').value,
         language:          document.getElementById('us-lang').value,
-        show_direct_links: document.getElementById('us-direct-links').checked,
-        mcp: {
-            enabled: _gc('us-mcp-enabled'),
-            rate_limit: 30,
-            permissions: {
-                can_read:    _gc('us-mcp-perm-read'),
-                can_upload:  _gc('us-mcp-perm-upload'),
-                can_create:  _gc('us-mcp-perm-create'),
-                can_rename:  _gc('us-mcp-perm-rename'),
-                can_delete:  _gc('us-mcp-perm-delete'),
-                can_storage: _gc('us-mcp-perm-storage'),
-                can_users:   false
-            }
-        }
+        show_direct_links: document.getElementById('us-direct-links').checked
     };
     const res = await fetch('/user/settings/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
     if (res.ok) { showToast(_t('toast_settings_saved','Settings saved'), 'success'); closeSettingsModal(); applyUserBgMusic(s.bg_music_url); applyDirectLinksVisibility(s.show_direct_links); }
@@ -621,15 +573,15 @@ function _skeletonHTML(rows) {
     return html;
 }
 
-// ─── Download URL Modal (streaming-aware) ──────────────────────────────────
+
 
 var _dlQueue = [];
 var _dlQueueIdSeq = 0;
-var _dlStreamInfo = null;   // cached StreamInfo from /stream-info
+var _dlStreamInfo = null;   
 var _dlCurrentTab = 'video';
 var _dlDetectTimer = null;
 
-// Known streaming platform host patterns
+
 var _dlStreamingHosts = [
     'youtube.com','youtu.be','vimeo.com','dailymotion.com','twitch.tv',
     'tiktok.com','instagram.com','facebook.com','fb.watch','twitter.com',
@@ -660,7 +612,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (window._dlUrlPending) { window._dlUrlPending = false; openDownloadURLModal(); }
 });
 
-// Called on every keystroke in the URL input
+
 function _dlOnUrlChange(val) {
     clearTimeout(_dlDetectTimer);
     var url = val.trim();
@@ -669,7 +621,7 @@ function _dlOnUrlChange(val) {
     if (_dlIsStreamingURL(url)) {
         document.getElementById('dlUrlBtn').textContent = 'Fetch Info';
         document.getElementById('dlDirectDesc').style.display = 'none';
-        // debounce: auto-fetch after 900ms of no typing
+        
         _dlDetectTimer = setTimeout(function() { _dlFetchStreamInfo(url); }, 900);
     } else {
         _dlResetStreamPanel();
@@ -711,7 +663,7 @@ async function _dlFetchStreamInfo(url) {
         if (btn) { btn.textContent = 'Fetch Info'; btn.classList.remove('loading'); }
 
         if (info.error || !info.available) {
-            // Fall back to direct download
+            
             showToast('yt-dlp unavailable, will use direct download', 'info');
             _dlResetStreamPanel();
             document.getElementById('dlDirectDesc').style.display = 'block';
@@ -728,7 +680,7 @@ async function _dlFetchStreamInfo(url) {
 }
 
 function _dlRenderStreamPanel(info) {
-    // Thumbnail + meta
+    
     var thumb = document.getElementById('dlThumb');
     var title = document.getElementById('dlVideoTitle');
     var meta  = document.getElementById('dlVideoMeta');
@@ -744,16 +696,16 @@ function _dlRenderStreamPanel(info) {
         meta.textContent = parts.join(' · ');
     }
 
-    // Build video format options (has both video + audio)
+    
     var videoFmts = (info.formats || []).filter(function(f) {
         return f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none';
     }).sort(function(a, b) { return (b.height || 0) - (a.height || 0); });
 
-    // Best combined formats + best+bestaudio merge options
+    
     var videoSel = document.getElementById('dlVideoSelect');
     if (videoSel) {
         videoSel.innerHTML = '';
-        // Add smart presets first
+        
         ['bestvideo+bestaudio/best','best'].forEach(function(fid) {
             var label = fid === 'bestvideo+bestaudio/best' ? 'Best Quality (auto merge)' : 'Best Single File';
             var opt = document.createElement('option');
@@ -774,7 +726,7 @@ function _dlRenderStreamPanel(info) {
         }
     }
 
-    // Audio only
+    
     var audioFmts = (info.formats || []).filter(function(f) {
         return (!f.vcodec || f.vcodec === 'none') && f.acodec && f.acodec !== 'none';
     }).sort(function(a, b) { return (b.tbr || 0) - (a.tbr || 0); });
@@ -822,7 +774,7 @@ async function _dlStreamDownload() {
     url = url.trim();
 
     if (_dlCurrentTab === 'direct') {
-        // Use regular server-side HTTP fetch
+        
         await _dlDirectFetch(url);
         return;
     }
@@ -922,7 +874,7 @@ function _renderDlQueue() {
     }).join('');
 }
 
-// Legacy function kept for any external calls
+
 async function confirmDownloadURL() {
     var url = (document.getElementById('dlUrlInput') || {}).value;
     if (!url) { showToast(_t('toast_enter_url','Please enter a URL'), 'error'); return; }

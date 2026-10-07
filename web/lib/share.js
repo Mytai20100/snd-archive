@@ -1,5 +1,5 @@
-// lib/share.js — public share page
-// Requires: utils.js
+
+
 
 'use strict';
 
@@ -8,12 +8,12 @@ function _t(key, fallback) { return (window._lang && window._lang[key]) || fallb
 let allFiles      = [];
 let filteredFiles = [];
 
-// Preview state
+
 let _shareFiles = [];
 let _shareIdx   = -1;
 function setPreviewFiles(files) { _shareFiles = files; }
 
-// ── URL builders ──────────────────────────────────────────────────────────────
+
 
 function _appendPt(url, f) {
     if (f.public_token) return url + '&pt=' + encodeURIComponent(f.public_token);
@@ -55,7 +55,7 @@ function buildDownloadUrl(f) {
     return f.public_token ? base + '?pt=' + encodeURIComponent(f.public_token) : base;
 }
 
-// ── Load & stats ──────────────────────────────────────────────────────────────
+
 
 async function loadPublicFiles() {
     try {
@@ -94,7 +94,7 @@ function filterFiles() {
     renderFiles(filteredFiles);
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+
 
 function renderFiles(files) {
     const section = document.getElementById('filesSection');
@@ -170,7 +170,7 @@ function copyFileLink(idx) {
         .catch(()  => showToast(_t('toast_error_copy', 'Failed to copy'), 'error'));
 }
 
-// ── Preview modal ─────────────────────────────────────────────────────────────
+
 
 function openPreviewByIdx(idx) {
     _shareIdx = idx;
@@ -250,5 +250,5 @@ function advancePreview(dir) {
     showPreview(_shareFiles[next]);
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+
 document.addEventListener('DOMContentLoaded', loadPublicFiles);

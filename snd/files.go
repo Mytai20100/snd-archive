@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	h "html"
+	"html/template"
 	"io"
 	"log"
 	"mime"
@@ -20,12 +21,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yeka/zip"
 )
 
-// resolveBaseDir returns the appropriate file base directory and permission key prefix.
-// Admin sessions → PublicDir, "". User sessions → UserPublicDir(uuid), "uuid/".
 func resolveBaseDir(r *http.Request) (baseDir string, permPrefix string) {
 	if u := GetSessionUser(r); u != nil {
 		return UserPublicDir(u.UUID), u.UUID + "/"
@@ -33,13 +33,10 @@ func resolveBaseDir(r *http.Request) (baseDir string, permPrefix string) {
 	return PublicDir, ""
 }
 
-// resolveBaseDirFromToken resolves base dir by checking token auth (for non-session requests).
 func resolveBaseDirFromToken(r *http.Request) (baseDir string, permPrefix string) {
-	// Try session first
 	if u := GetSessionUser(r); u != nil {
 		return UserPublicDir(u.UUID), u.UUID + "/"
 	}
-	// Try user token
 	token := r.URL.Query().Get("token")
 	if token == "" {
 		token = r.Header.Get("X-API-Token")
@@ -52,8 +49,6 @@ func resolveBaseDirFromToken(r *http.Request) (baseDir string, permPrefix string
 	return PublicDir, ""
 }
 
-// safePath validates and joins base+rel, ensuring the result stays within base.
-// Returns the joined path and true on success; empty string and false on traversal attempt.
 func safePath(base, rel string) (string, bool) {
 	if strings.Contains(rel, "..") {
 		return "", false
@@ -64,38 +59,95 @@ func safePath(base, rel string) (string, bool) {
 	if err1 != nil || err2 != nil {
 		return "", false
 	}
-	// Must be equal to base (file directly in base) or within base subdir
 	if absJoin != absBase && !strings.HasPrefix(absJoin, absBase+string(filepath.Separator)) {
 		return "", false
 	}
 	return joined, true
 }
 
+type uploadActor struct {
+	baseDir string
+	user    *UserAccount
+	owner   string
+}
+
+func actorFromSession(r *http.Request) uploadActor {
+	if u := GetSessionUser(r); u != nil {
+		return uploadActor{baseDir: UserPublicDir(u.UUID), user: u, owner: u.Username}
+	}
+	return uploadActor{baseDir: PublicDir, owner: Cfg.Username}
+}
+
+func (a uploadActor) quotaRemaining() int64 {
+	if a.user == nil || a.user.StorageLimit <= 0 {
+		return -1
+	}
+	used := CalcUserStorage(a.user.UUID)
+	if used >= a.user.StorageLimit {
+		return 0
+	}
+	return a.user.StorageLimit - used
+}
+
+func (a uploadActor) ensureDir() error {
+	if a.user == nil {
+		return nil
+	}
+	return EnsureUserDir(a.user.UUID)
+}
+
+func uploadResultWriter(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+}
+
+func uploadCleanTmp(baseDir, relPath, name string) {
+	tmp, ok := safePath(baseDir, filepath.Join(relPath, name+".upload_tmp"))
+	if ok {
+		os.Remove(tmp)
+	}
+}
+
 func HandleUpload(w http.ResponseWriter, r *http.Request) {
+	uploadInto(w, r, actorFromSession(r))
+}
+
+func uploadInto(w http.ResponseWriter, r *http.Request, actor uploadActor) {
 	GlobalStatsMu.Lock()
 	GlobalStats.TotalRequests++
 	GlobalStatsMu.Unlock()
 
-	if r.Method != "POST" {
+	extendMediaDeadlines(w)
+	uploadResultWriter(w)
+
+	if r.Method != "POST" && r.Method != "PUT" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	currentPath := r.URL.Query().Get("path")
+	currentPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	if strings.Contains(currentPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
-
-	userAccount := GetSessionUser(r)
-	baseDir := PublicDir
-	if userAccount != nil {
-		baseDir = UserPublicDir(userAccount.UUID)
+	if err := actor.ensureDir(); err != nil {
+		http.Error(w, "Cannot prepare storage", http.StatusInternalServerError)
+		return
 	}
 
 	contentType := r.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		if q := r.URL.Query().Get("filename"); q != "" {
+			uploadChunkInto(w, r, actor, uploadChunkInput{
+				path:     currentPath,
+				filename: q,
+				offset:   0,
+				total:    r.ContentLength,
+				final:    true,
+				action:   r.URL.Query().Get("action"),
+			})
+			return
+		}
 		http.Error(w, "Expected multipart/form-data", http.StatusBadRequest)
 		return
 	}
@@ -128,24 +180,17 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Quota check for user accounts
-		var storageRemaining int64 = -1
-		if userAccount != nil && userAccount.StorageLimit > 0 {
-			used := CalcUserStorage(userAccount.UUID)
-			if used >= userAccount.StorageLimit {
-				part.Close()
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": false,
-					"message": "Storage quota exceeded",
-				})
-				return
-			}
-			storageRemaining = userAccount.StorageLimit - used
+		storageRemaining := actor.quotaRemaining()
+		if storageRemaining == 0 {
+			part.Close()
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Storage quota exceeded",
+			})
+			return
 		}
 
-		// FIX: validate upload path with safePath
-		targetPath, ok := safePath(baseDir, filepath.Join(currentPath, filename))
+		targetPath, ok := safePath(actor.baseDir, filepath.Join(currentPath, filename))
 		if !ok {
 			part.Close()
 			continue
@@ -155,7 +200,7 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		dst, err := os.Create(targetPath)
+		dst, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
 			part.Close()
 			if Debug {
@@ -164,9 +209,8 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Cap the read to the remaining quota (plus one byte to detect overflow).
 		var reader io.Reader = part
-		if storageRemaining >= 0 {
+		if storageRemaining > 0 {
 			reader = io.LimitReader(part, storageRemaining+1)
 		}
 		written, err := io.Copy(dst, reader)
@@ -181,10 +225,8 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// If we read more than the remaining quota the file exceeded the limit.
-		if storageRemaining >= 0 && written > storageRemaining {
+		if storageRemaining > 0 && written > storageRemaining {
 			os.Remove(targetPath)
-			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"message": "Storage quota exceeded",
@@ -192,89 +234,88 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if userAccount != nil {
+		if actor.user != nil {
 			UsersMu.Lock()
-			userAccount.RequestCount++
+			actor.user.RequestCount++
 			UsersMu.Unlock()
 		}
 
 		uploadedCount++
-		RecordUploadBytes(written)
+		RecordUploadBytesNamed(written, filename)
 		if Debug {
 			log.Printf("[UPLOAD] %s (%d bytes)", targetPath, written)
 		}
 	}
 
-	// Recalculate UsedStorage from disk after all files are written so the
-	// stored value stays accurate regardless of deletions or renames.
-	if userAccount != nil {
-		recalc := CalcUserStorage(userAccount.UUID)
+	if actor.user != nil {
+		recalc := CalcUserStorage(actor.user.UUID)
 		UsersMu.Lock()
-		userAccount.UsedStorage = recalc
+		actor.user.UsedStorage = recalc
 		UsersMu.Unlock()
 		go SaveUsers()
 	}
 
 	UpdateStats()
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"uploaded": uploadedCount,
-		"message":  fmt.Sprintf("%d file(s) uploaded", uploadedCount),
+		"success":   true,
+		"uploaded":  uploadedCount,
+		"owner":     actor.owner,
+		"message":   fmt.Sprintf("%d file(s) uploaded", uploadedCount),
+		"filenames": []string{},
 	})
 }
 
+type uploadChunkInput struct {
+	path     string
+	filename string
+	offset   int64
+	total    int64
+	final    bool
+	action   string
+}
+
 func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	uploadChunkInto(w, r, actorFromSession(r), uploadChunkInput{
+		path:     r.URL.Query().Get("path"),
+		filename: r.URL.Query().Get("filename"),
+		offset:   parseInt64Query(r, "offset"),
+		total:    parseInt64Query(r, "total"),
+		final:    r.URL.Query().Get("final") == "1",
+		action:   r.URL.Query().Get("action"),
+	})
+}
+
+func parseInt64Query(r *http.Request, key string) int64 {
+	v, _ := strconv.ParseInt(r.URL.Query().Get(key), 10, 64)
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func uploadChunkInto(w http.ResponseWriter, r *http.Request, actor uploadActor, in uploadChunkInput) {
+	extendMediaDeadlines(w)
+	uploadResultWriter(w)
+
+	if r.Method != "POST" && r.Method != "PUT" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	currentPath := r.URL.Query().Get("path")
-	filename := r.URL.Query().Get("filename")
-	offsetStr := r.URL.Query().Get("offset")
-	totalStr := r.URL.Query().Get("total")
-	final := r.URL.Query().Get("final") == "1"
-
-	if strings.Contains(currentPath, "..") || strings.Contains(filename, "..") {
+	if strings.Contains(in.path, "..") || strings.Contains(in.filename, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
-
-	filename = filepath.Base(filename)
-	if filename == "" || filename == "." {
+	in.filename = filepath.Base(in.filename)
+	if in.filename == "" || in.filename == "." {
 		http.Error(w, "Invalid filename", http.StatusBadRequest)
 		return
 	}
-
-	offset, _ := strconv.ParseInt(offsetStr, 10, 64)
-	total, _ := strconv.ParseInt(totalStr, 10, 64)
-
-	userAccount := GetSessionUser(r)
-	baseDir := PublicDir
-	if userAccount != nil {
-		baseDir = UserPublicDir(userAccount.UUID)
-		if userAccount.StorageLimit > 0 {
-			used := CalcUserStorage(userAccount.UUID)
-			// On the first chunk we know the full file size; reject early so we
-			// never write bytes that would exceed the limit.
-			if offset == 0 && total > 0 && used+total > userAccount.StorageLimit {
-				http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
-				return
-			}
-			// On subsequent chunks the growing .upload_tmp is included in used;
-			// if we are somehow already at the limit, abort and clean up the tmp.
-			if offset > 0 && used >= userAccount.StorageLimit {
-				tmpPathEarly, ok2 := safePath(baseDir, filepath.Join(currentPath, filename+".upload_tmp"))
-				if ok2 {
-					os.Remove(tmpPathEarly)
-				}
-				http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
-				return
-			}
-		}
+	if err := actor.ensureDir(); err != nil {
+		http.Error(w, "Cannot prepare storage", http.StatusInternalServerError)
+		return
 	}
 
-	targetPath, ok := safePath(baseDir, filepath.Join(currentPath, filename))
+	targetPath, ok := safePath(actor.baseDir, filepath.Join(in.path, in.filename))
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
@@ -283,14 +324,62 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Cannot create directory", http.StatusInternalServerError)
 		return
 	}
-
 	tmpPath := targetPath + ".upload_tmp"
 
-	var flag int
-	if offset == 0 {
-		flag = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	} else {
-		flag = os.O_WRONLY | os.O_CREATE
+	var curSize int64
+	if st, err := os.Stat(tmpPath); err == nil {
+		curSize = st.Size()
+	}
+
+	if in.offset == 0 {
+		uploadCleanTmp(actor.baseDir, in.path, in.filename)
+		if actor.user != nil && actor.user.StorageLimit > 0 && in.total > 0 {
+			used := CalcUserStorage(actor.user.UUID)
+			if used+in.total > actor.user.StorageLimit {
+				http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
+				return
+			}
+		}
+		curSize = 0
+	} else if curSize < in.offset {
+		http.Error(w, "Offset beyond uploaded data", http.StatusRequestedRangeNotSatisfiable)
+		return
+	} else if curSize > in.offset {
+		if !in.final {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":   true,
+				"written":   0,
+				"offset":    curSize,
+				"total":     in.total,
+				"done":      false,
+				"duplicate": true,
+			})
+			return
+		}
+		if _, err := os.Stat(targetPath); err == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"written": 0,
+				"offset":  curSize,
+				"total":   in.total,
+				"done":    true,
+				"size":    curSize,
+				"owner":   actor.owner,
+			})
+			return
+		}
+	}
+
+	flag := os.O_WRONLY | os.O_CREATE
+	if in.offset == 0 {
+		flag |= os.O_TRUNC
+	}
+
+	var limit int64 = -1
+	if actor.user != nil && actor.user.StorageLimit > 0 {
+		if remaining := actor.quotaRemaining(); remaining > 0 {
+			limit = remaining
+		}
 	}
 
 	f, err := os.OpenFile(tmpPath, flag, 0644)
@@ -298,40 +387,63 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Cannot open file for writing", http.StatusInternalServerError)
 		return
 	}
-
-	if offset > 0 {
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			f.Close()
-			http.Error(w, "Seek error", http.StatusInternalServerError)
-			return
-		}
+	if _, err := f.Seek(in.offset, io.SeekStart); err != nil {
+		f.Close()
+		http.Error(w, "Seek error", http.StatusInternalServerError)
+		return
 	}
 
-	written, err := io.Copy(f, r.Body)
+	var src io.Reader = r.Body
+	if limit >= 0 {
+		src = io.LimitReader(r.Body, limit+1)
+	}
+	written, err := io.Copy(f, src)
 	f.Close()
 
 	if err != nil {
 		http.Error(w, "Write error", http.StatusInternalServerError)
 		return
 	}
-
-	RecordUploadBytes(written)
-
-	if Debug {
-		log.Printf("[CHUNK] %s offset=%d written=%d total=%d final=%v", filename, offset, written, total, final)
+	if limit >= 0 && written > limit {
+		uploadCleanTmp(actor.baseDir, in.path, in.filename)
+		http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
+		return
 	}
 
-	if final {
-		// Check if caller wants to overwrite or rename
-		action := r.URL.Query().Get("action") // "overwrite" | "rename" | "" (default overwrite for backward-compat)
-		if action == "rename" {
-			// Find a non-conflicting name
+	RecordUploadBytesNamed(written, in.filename)
+
+	if Debug {
+		log.Printf("[CHUNK] %s offset=%d written=%d total=%d final=%v", in.filename, in.offset, written, in.total, in.final)
+	}
+
+	resp := map[string]interface{}{
+		"success": true,
+		"written": written,
+		"offset":  in.offset + written,
+		"total":   in.total,
+		"done":    false,
+	}
+
+	if in.final {
+		st, err := os.Stat(tmpPath)
+		if err != nil {
+			http.Error(w, "Finalize error", http.StatusInternalServerError)
+			return
+		}
+		if in.total > 0 && st.Size() != in.total {
+			uploadCleanTmp(actor.baseDir, in.path, in.filename)
+			http.Error(w, "Size mismatch: expected "+strconv.FormatInt(in.total, 10)+" got "+strconv.FormatInt(st.Size(), 10), http.StatusBadRequest)
+			return
+		}
+		finalName := in.filename
+		if in.action == "rename" {
 			ext := filepath.Ext(targetPath)
 			base := targetPath[:len(targetPath)-len(ext)]
 			for i := 1; i < 1000; i++ {
 				candidate := fmt.Sprintf("%s (%d)%s", base, i, ext)
 				if _, err := os.Stat(candidate); os.IsNotExist(err) {
 					targetPath = candidate
+					finalName = filepath.Base(candidate)
 					break
 				}
 			}
@@ -340,30 +452,66 @@ func HandleUploadChunk(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Finalize error", http.StatusInternalServerError)
 			return
 		}
-		// Recalculate UsedStorage from disk now that the file is committed.
-		if userAccount != nil {
-			recalc := CalcUserStorage(userAccount.UUID)
+		if actor.user != nil {
+			recalc := CalcUserStorage(actor.user.UUID)
 			UsersMu.Lock()
-			userAccount.UsedStorage = recalc
-			userAccount.RequestCount++
+			actor.user.UsedStorage = recalc
+			actor.user.RequestCount++
 			UsersMu.Unlock()
 			go SaveUsers()
 		}
 		UpdateStats()
+		resp["done"] = true
+		resp["size"] = st.Size()
+		resp["filename"] = finalName
+		resp["path"] = filepath.ToSlash(filepath.Join(in.path, finalName))
+		resp["owner"] = actor.owner
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"written": written,
-		"offset":  offset,
-		"total":   total,
-		"done":    final,
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
-// HandleCheckExists checks if a file already exists at the upload destination.
-// POST /check-exists  body: {"path":"subdir","filename":"foo.zip"}
-// Returns: {"exists": true/false, "filename": "resolved name"}
+func cleanupStaleUploadTmp(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".upload_tmp") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+func startUploadTmpJanitor() {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				cleanupStaleUploadTmp(PublicDir, 24*time.Hour)
+				UsersMu.RLock()
+				for _, u := range Users {
+					cleanupStaleUploadTmp(UserPublicDir(u.UUID), 24*time.Hour)
+				}
+				UsersMu.RUnlock()
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
 func HandleCheckExists(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path     string `json:"path"`
@@ -401,8 +549,6 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 	session := GetSessionInfo(r)
 	userAccount := GetSessionUser(r)
 
-	// FIX: use resolveBaseDirFromToken so user API tokens see their own directory,
-	// not the admin's PublicDir. Previously token holders always fell back to PublicDir.
 	baseDir, _ := resolveBaseDirFromToken(r)
 
 	_ = session
@@ -410,8 +556,6 @@ func HandleListFiles(w http.ResponseWriter, r *http.Request) {
 
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
-		// Directory doesn't exist yet (e.g. new user with no uploads) — return empty list
-		// instead of 500 so the dashboard doesn't show "Error loading files".
 		if os.IsNotExist(err) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -534,7 +678,6 @@ func HandlePublicFiles(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Only include user public files when the admin has enabled it
 	SiteSettingsMu.RLock()
 	showUserPublic := SiteSettingsData.ShowUserPublicOnShare
 	SiteSettingsMu.RUnlock()
@@ -642,7 +785,6 @@ func isUUIDDir(name string) bool {
 func HandleView(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/view/"):]
 
-	// FIX: use resolveBaseDirFromToken so user files load correctly
 	baseDir, _ := resolveBaseDirFromToken(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -650,54 +792,70 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := os.Stat(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
 			"The file you're trying to view doesn't exist.", "File: "+h.EscapeString(filename))
 		return
 	}
-
-	content, err := os.ReadFile(filePath)
+	info, err := f.Stat()
 	if err != nil {
-		http.Error(w, "Error reading file", http.StatusInternalServerError)
+		f.Close()
+		http.Error(w, "Error getting file info", http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		f.Close()
+		RenderErrorPage(w, http.StatusNotFound, "File Not Found",
+			"The file you're trying to view doesn't exist.", "File: "+h.EscapeString(filename))
 		return
 	}
 
-	fileType := DetectFileType(filename, content)
+	fileType := GetFileType(filename)
+	if fileType == "binary" || fileType == "archive" {
+		var head [512]byte
+		n, _ := f.Read(head[:])
+		fileType = DetectFileType(filename, head[:n])
+	}
 	token := r.URL.Query().Get("token")
 
-	if fileType == "image" {
-		ext := strings.ToLower(filepath.Ext(filename))
-		contentType := "image/jpeg"
-		switch ext {
-		case ".png":
-			contentType = "image/png"
-		case ".gif":
-			contentType = "image/gif"
-		case ".webp":
-			contentType = "image/webp"
-		case ".svg":
-			contentType = "image/svg+xml"
-		case ".bmp":
-			contentType = "image/bmp"
-		case ".avif":
-			contentType = "image/avif"
-		case ".tif", ".tiff":
-			contentType = "image/tiff"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.Write(content)
-		return
-	}
-
 	if fileType == "video" || fileType == "audio" {
-		streamURL := "/stream/" + filename
+		streamURL := "/stream/" + h.EscapeString(filename)
 		if token != "" {
-			streamURL += "?token=" + token
+			streamURL += "?token=" + h.EscapeString(token)
 		}
+		f.Close()
 		http.Redirect(w, r, streamURL, http.StatusSeeOther)
 		return
 	}
+
+	if fileType == "image" {
+		extendMediaDeadlines(w)
+		setFileETag(w, info)
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+		setTrafficMeta(r, "download", filename)
+		ext := strings.ToLower(filepath.Ext(filename))
+		contentType := getContentTypeForType(fileType, ext)
+		w.Header().Set("Content-Type", contentType)
+		http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+		return
+	}
+
+	const maxViewBytes = 4 << 20
+	if info.Size() > maxViewBytes {
+		f.Close()
+		http.Error(w, "File too large to view in browser", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	content, err := io.ReadAll(io.LimitReader(f, maxViewBytes+1))
+	if err != nil {
+		f.Close()
+		http.Error(w, "Error reading file", http.StatusInternalServerError)
+		return
+	}
+	f.Close()
 
 	isAuth := IsAuthenticated(r)
 	editButton := ""
@@ -794,7 +952,6 @@ func HandleView(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(viewHTML))
 }
 
-// monacoLangForExt maps file extensions to Monaco language IDs.
 func monacoLangForExt(ext string) string {
 	switch strings.ToLower(ext) {
 	case ".js", ".mjs", ".cjs":
@@ -851,7 +1008,6 @@ func monacoLangForExt(ext string) string {
 func HandleEdit(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/edit/"):]
 
-	// FIX: use resolveBaseDir for user file isolation
 	baseDir, _ := resolveBaseDir(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -883,7 +1039,6 @@ func HandleEdit(w http.ResponseWriter, r *http.Request) {
 	ext := filepath.Ext(filename)
 	monacoLang := monacoLangForExt(ext)
 
-	// Encode content as JSON string for safe injection into JS
 	contentJSON, _ := json.Marshal(string(content))
 
 	editHTML := `<!DOCTYPE html>
@@ -967,7 +1122,6 @@ func HandleEdit(w http.ResponseWriter, r *http.Request) {
             });
             document.getElementById('lineCount').textContent = editor.getModel().getLineCount();
 
-            // Ctrl+S / Cmd+S save
             editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
                 saveFile();
             });
@@ -1022,7 +1176,6 @@ func HandleSave(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/save/"):]
 	baseDir, _ := resolveBaseDir(r)
 
-	// FIX: path traversal protection
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -1086,7 +1239,6 @@ func getMediaContentType(filename string) string {
 	return "application/octet-stream"
 }
 
-// HandleRawDispatch routes /raw/ requests: if ?u= param present → user file; else check auth.
 func HandleRawDispatch(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("u") != "" {
 		HandleUserPublicFile(w, r)
@@ -1098,7 +1250,6 @@ func HandleRawDispatch(w http.ResponseWriter, r *http.Request) {
 func HandleRaw(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/raw/"):]
 
-	// FIX: resolve base dir by token/session so user files load correctly
 	baseDir, _ := resolveBaseDirFromToken(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -1152,7 +1303,9 @@ func HandleRaw(w http.ResponseWriter, r *http.Request) {
 		contentType = "application/octet-stream"
 	}
 
-	RecordDownloadBytes(stat.Size())
+	extendMediaDeadlines(w)
+	setFileETag(w, stat)
+	setTrafficMeta(r, "download", filename)
 	w.Header().Set("Content-Type", contentType)
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 }
@@ -1160,7 +1313,6 @@ func HandleRaw(w http.ResponseWriter, r *http.Request) {
 func HandleDownload(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/download/"):]
 
-	// FIX: resolve base dir for user files
 	baseDir, _ := resolveBaseDirFromToken(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -1168,26 +1320,43 @@ func HandleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	DownloadMu.Lock()
-	DownloadCounts[filename]++
-	DownloadMu.Unlock()
-	SaveDownloadCounts()
+	f, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil || stat.IsDir() {
+		http.Error(w, "Error getting file info", http.StatusInternalServerError)
+		return
+	}
+
+	isContinuation := r.Method == http.MethodHead || strings.Contains(r.Header.Get("Range"), "bytes=")
+	if !isContinuation {
+		DownloadMu.Lock()
+		DownloadCounts[filename]++
+		DownloadMu.Unlock()
+		markDownloadCountsDirty()
+	}
 
 	if Debug {
 		log.Printf("Download: %s", filename)
 	}
 
-	// FIX: sanitize filename for Content-Disposition header injection
 	safeName := filepath.Base(filename)
 	safeName = strings.ReplaceAll(safeName, "\"", "")
 	safeName = strings.ReplaceAll(safeName, "\n", "")
 	safeName = strings.ReplaceAll(safeName, "\r", "")
 
+	extendMediaDeadlines(w)
+	setFileETag(w, stat)
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+safeName+"\"")
-	if fi, err := os.Stat(filePath); err == nil {
-		RecordDownloadBytes(fi.Size())
-	}
-	http.ServeFile(w, r, filePath)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+	setTrafficMeta(r, "download", filename)
+	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 }
 
 func HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -1198,7 +1367,6 @@ func HandleDelete(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/delete/"):]
 	baseDir, permPrefix := resolveBaseDir(r)
 
-	// FIX: path traversal protection
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -1240,7 +1408,6 @@ func HandleRename(w http.ResponseWriter, r *http.Request) {
 
 	baseDir, permPrefix := resolveBaseDir(r)
 
-	// FIX: path traversal protection on both old and new names
 	oldPath, ok1 := safePath(baseDir, oldName)
 	newPath, ok2 := safePath(baseDir, req.NewName)
 	if !ok1 || !ok2 {
@@ -1345,10 +1512,6 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 	isAuth := IsAuthenticated(r)
 	baseDir, permPrefix := resolveBaseDir(r)
 
-	// Collect file data first into memory, check permissions, then write zip.
-	// Streaming zip directly to http.ResponseWriter is unsafe: once the first byte
-	// is sent the 200 status is committed, so a mid-stream error silently produces
-	// a truncated/corrupt zip with no error visible to the client.
 	type entry struct {
 		name string
 		data []byte
@@ -1361,10 +1524,9 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		// Unauthenticated users may only zip files that are public.
 		if !isAuth {
 			permKey := permPrefix + filename
-			dirKey  := permPrefix + filepath.Dir(filename)
+			dirKey := permPrefix + filepath.Dir(filename)
 			if dirKey == permPrefix+"." {
 				dirKey = permPrefix
 			}
@@ -1372,10 +1534,10 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 			fp, fExists := FilePermissions[permKey]
 			dp, dExists := FolderPermissions[dirKey]
 			PermissionMu.RUnlock()
-			filePublic   := fExists && fp.IsPublic
+			filePublic := fExists && fp.IsPublic
 			folderPublic := dExists && dp.IsPublic
 			if !filePublic && !folderPublic {
-				continue // silently skip private files for guests
+				continue
 			}
 		}
 		data, err := os.ReadFile(filePath)
@@ -1394,7 +1556,6 @@ func HandleZipMultiple(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build zip in-memory
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for _, e := range entries {
@@ -1431,7 +1592,6 @@ func HandleZipView(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/zip-view/"):]
 	baseDir, permPrefix := resolveBaseDirFromToken(r)
 
-	// Security: require auth or valid token unless file is explicitly public
 	permKey := permPrefix + filename
 	folderKey := permPrefix + filepath.Dir(filename)
 	if folderKey == permPrefix+"." {
@@ -1485,10 +1645,8 @@ func HandleZipView(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errZipNeedsPassword is returned when a ZIP requires a password but none was supplied.
 var errZipNeedsPassword = fmt.Errorf("needs_password")
 
-// zipIsEncrypted returns true if at least one file entry in the ZIP is encrypted.
 func zipIsEncrypted(src string) bool {
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -1507,7 +1665,6 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	archivePath := strings.TrimPrefix(r.URL.Path, "/extract-zip/")
 	baseDir, _ := resolveBaseDir(r)
 
-	// FIX: path traversal protection
 	fullArchivePath, ok := safePath(baseDir, archivePath)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -1515,7 +1672,6 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read optional password from POST body
 	var password string
 	if r.Method == http.MethodPost {
 		r.ParseForm()
@@ -1530,7 +1686,6 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	extractDir := filepath.Join(baseDir, extractName+"_extracted")
-	// Validate extractDir stays within baseDir
 	if _, ok := safePath(baseDir, extractName+"_extracted"); !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid extract path"})
@@ -1555,7 +1710,6 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 	case ext == ".gz":
 		extractErr = extractSingleGz(fullArchivePath, extractDir)
 	default:
-		// For ZIP: check encryption before extracting
 		if password == "" && zipIsEncrypted(fullArchivePath) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "needs_password": true})
@@ -1566,12 +1720,10 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if extractErr != nil {
-		// Wrong password → tell the frontend to ask again
 		if extractErr == errZipNeedsPassword {
 			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "needs_password": true, "wrong_password": true})
 			return
 		}
-		// Zip bomb / dangerous archive
 		if extractErr == errZipBomb || extractErr == errTooManyFiles {
 			log.Printf("[SECURITY] Rejected dangerous archive %s: %v", archivePath, extractErr)
 			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "⚠ " + extractErr.Error()})
@@ -1581,22 +1733,19 @@ func HandleExtractZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	LogAccess(GetClientIP(r), "extract", archivePath, r.UserAgent())
+	LogAccess(GetClientIP(r), "extract", archivePath, r.UserAgent(), "")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// ZIP bomb / dangerous archive limits
 const (
-	maxExtractedBytes  = 4 * 1024 * 1024 * 1024 // 4 GB total uncompressed cap
-	maxExtractFiles    = 10_000                  // max number of entries
-	maxCompressionRatio = 100                    // uncompressed / compressed ratio cap
+	maxExtractedBytes   = 4 * 1024 * 1024 * 1024
+	maxExtractFiles     = 10_000
+	maxCompressionRatio = 100
 )
 
 var errZipBomb = fmt.Errorf("archive rejected: possible zip bomb (exceeds size or ratio limits)")
 var errTooManyFiles = fmt.Errorf("archive rejected: too many entries (limit %d)", maxExtractFiles)
 
-// checkZipBomb analyses a ZIP before extraction.
-// Returns an error if the archive looks dangerous.
 func checkZipBomb(src string) error {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -1604,7 +1753,7 @@ func checkZipBomb(src string) error {
 	}
 	compressedSize := info.Size()
 	if compressedSize == 0 {
-		compressedSize = 1 // avoid div-by-zero
+		compressedSize = 1
 	}
 
 	reader, err := zip.OpenReader(src)
@@ -1625,7 +1774,6 @@ func checkZipBomb(src string) error {
 		}
 	}
 
-	// Compression ratio check (only meaningful if archive is > 1 KB)
 	if compressedSize > 1024 && totalUncompressed > 0 {
 		ratio := int64(totalUncompressed) / compressedSize
 		if ratio > maxCompressionRatio {
@@ -1637,7 +1785,6 @@ func checkZipBomb(src string) error {
 }
 
 func extractZipArchive(src, destDir string, password string) error {
-	// ── Zip-bomb check before touching any file ──────────────────────────────
 	if err := checkZipBomb(src); err != nil {
 		return err
 	}
@@ -1653,7 +1800,6 @@ func extractZipArchive(src, destDir string, password string) error {
 
 	for _, f := range reader.File {
 		target := filepath.Join(destDir, filepath.Clean(f.Name))
-		// zip-slip guard: target must be inside destDir
 		if !strings.HasPrefix(filepath.ToSlash(target)+"/", safeBase) {
 			continue
 		}
@@ -1726,7 +1872,6 @@ func extractTarRaw(src, destDir string) error {
 }
 
 func extractTarStream(tr *tar.Reader, destDir string) error {
-	// Ensure destDir ends with separator for reliable prefix matching
 	safeBase := filepath.ToSlash(filepath.Clean(destDir)) + "/"
 	var totalWritten int64
 	var fileCount int
@@ -1743,7 +1888,6 @@ func extractTarStream(tr *tar.Reader, destDir string) error {
 			return errTooManyFiles
 		}
 		target := filepath.Join(destDir, filepath.Clean(header.Name))
-		// tar-slip guard: target must be inside destDir
 		if !strings.HasPrefix(filepath.ToSlash(target)+"/", safeBase) {
 			continue
 		}
@@ -1800,7 +1944,6 @@ func extractSingleGz(src, destDir string) error {
 func HandleStream(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/stream/"):]
 
-	// FIX: use resolveBaseDirFromToken so user streams work
 	baseDir, _ := resolveBaseDirFromToken(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -1832,10 +1975,12 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	extendMediaDeadlines(w)
+	setFileETag(w, stat)
+	setTrafficMeta(r, "download", filename)
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Cache-Control", "no-cache")
-	// CORS for HLS.js cross-origin segment loading
+	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Range")
 
@@ -1845,7 +1990,6 @@ func HandleStream(w http.ResponseWriter, r *http.Request) {
 func HandleStreamPage(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path[len("/play/"):]
 
-	// FIX: use resolveBaseDirFromToken for user media
 	baseDir, _ := resolveBaseDirFromToken(r)
 	filePath, ok := safePath(baseDir, filename)
 	if !ok {
@@ -1954,7 +2098,6 @@ func HandleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseDir, _ := resolveBaseDir(r)
-	// FIX: validate full path
 	fullPath, ok := safePath(baseDir, filepath.Join(req.CurrentPath, req.Path))
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -1976,7 +2119,6 @@ func HandleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 	folderName := r.URL.Path[len("/delete-folder/"):]
 	baseDir, permPrefix := resolveBaseDir(r)
 
-	// FIX: path traversal protection
 	folderPath, ok := safePath(baseDir, folderName)
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -2011,7 +2153,6 @@ func HandleRenameFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newFullPath := filepath.Join(filepath.Dir(oldFullPath), req.NewName)
-	// Validate newFullPath stays within baseDir
 	absBase, _ := filepath.Abs(baseDir)
 	absNew, _ := filepath.Abs(newFullPath)
 	if !strings.HasPrefix(absNew, absBase) {
@@ -2056,14 +2197,13 @@ func HandleSetPermission(w http.ResponseWriter, r *http.Request) {
 	PermissionMu.Lock()
 	existing := FilePermissions[key]
 	if req.IsPublic {
-		// Reuse existing token if already public; generate a new one if not.
 		if existing.PublicToken == "" {
 			existing.PublicToken = GenerateRandomToken(32)
 		}
 		existing.IsPublic = true
 	} else {
 		existing.IsPublic = false
-		existing.PublicToken = "" // revoke anonymous access token
+		existing.PublicToken = ""
 	}
 	FilePermissions[key] = existing
 	PermissionMu.Unlock()
@@ -2106,7 +2246,7 @@ func HandleSetFolderPermission(w http.ResponseWriter, r *http.Request) {
 		existing.IsPublic = true
 	} else {
 		existing.IsPublic = false
-		existing.PublicToken = "" // revoke anonymous access token
+		existing.PublicToken = ""
 	}
 	FolderPermissions[key] = existing
 	PermissionMu.Unlock()
@@ -2162,7 +2302,6 @@ func HandleSetChmod(w http.ResponseWriter, r *http.Request) {
 func HandleFolderView(w http.ResponseWriter, r *http.Request) {
 	folderPath := strings.TrimPrefix(r.URL.Path, "/folder/")
 
-	// FIX: use resolveBaseDirFromToken for user folders
 	baseDir, _ := resolveBaseDirFromToken(r)
 	fullPath, ok := safePath(baseDir, folderPath)
 	if !ok {
@@ -2177,7 +2316,6 @@ func HandleFolderView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isAuth := IsAuthenticated(r)
-	// Resolve permission key: for user-scoped base dirs, prefix with uuid
 	_, permPrefix := resolveBaseDirFromToken(r)
 	permKey := permPrefix + folderPath
 	PermissionMu.RLock()
@@ -2225,18 +2363,14 @@ func HandleFolderView(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// C1 FIX: Never expose the admin APIToken to sub-users.
-	// Return the requesting user's own token, or empty for unauthenticated.
 	token := ""
 	if isAuth {
 		session := GetSessionInfo(r)
 		if session != nil && session.UserUUID != "" {
-			// Sub-user: return their own token
 			if u := GetUserByUUID(session.UserUUID); u != nil {
 				token = u.APIToken
 			}
 		}
-		// True admin gets no token here — they don't need one passed via JSON
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2256,12 +2390,10 @@ func HandleFavicon(w http.ResponseWriter, r *http.Request) {
 
 func HandleErrorPage(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
-	// FIX: escape user-supplied path to prevent XSS
 	path := h.EscapeString(r.URL.Query().Get("path"))
 	if code == "" {
 		code = "403"
 	}
-	// Whitelist valid status codes
 	switch code {
 	case "400", "401", "403", "404", "500":
 	default:
@@ -2338,7 +2470,6 @@ func HandleFolderInfo(w http.ResponseWriter, r *http.Request) {
 	folderPath := strings.TrimPrefix(r.URL.Path, "/folder-info/")
 	baseDir, permPrefix := resolveBaseDir(r)
 
-	// FIX: path traversal protection
 	fullPath, ok := safePath(baseDir, folderPath)
 	if !ok {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -2378,110 +2509,58 @@ func HandleFolderInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
-	filename := strings.TrimPrefix(r.URL.Path, "/embed/")
+type embedPageData struct {
+	Title            string
+	Description      string
+	SiteName         string
+	CanonicalURL     string
+	OGImage          string
+	OGImageWidth     int
+	OGImageHeight    int
+	OGType           string
+	TwitterCard      string
+	OGVideoURL       string
+	OGVideoSecureURL string
+	OGVideoType      string
+	OGVideoWidth     int
+	OGVideoHeight    int
+	StreamURL        string
+	DownloadURL      string
+	BaseName         string
+	FileType         string
+	SizeText         string
+	ModDate          string
+	Body             template.HTML
+	DownloadLabel    string
+	Version          string
+}
 
-	// FIX: use resolveBaseDirFromToken for user files
-	baseDir, _ := resolveBaseDirFromToken(r)
-	filePath, ok := safePath(baseDir, filename)
-	if !ok {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	stat, err := os.Stat(filePath)
-	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
-		return
-	}
-
-	token := r.URL.Query().Get("token")
-	baseName := filepath.Base(filename)
-	fileType := GetFileType(filename)
-
-	streamURL := "/stream/" + h.EscapeString(filename)
-	downloadURL := "/download/" + h.EscapeString(filename)
-	if token != "" {
-		streamURL += "?token=" + h.EscapeString(token)
-		downloadURL += "?token=" + h.EscapeString(token)
-	}
-
-	embedTitle := Cfg.EmbedTitle
-	if embedTitle == "" {
-		embedTitle = baseName + " — " + Cfg.SiteName
-	}
-	embedDesc := Cfg.EmbedDescription
-	if embedDesc == "" {
-		embedDesc = "File sharing powered by " + Cfg.SiteName
-	}
-	embedImage := Cfg.EmbedImageURL
-	if embedImage == "" {
-		embedImage = Cfg.IconURL
-	}
-
-	protocol := GetProtocol()
-	baseURL := protocol + "://" + r.Host
-
-	ogType := "website"
-	if fileType == "video" {
-		ogType = "video.other"
-	} else if fileType == "image" {
-		ogType = "image"
-		embedImage = baseURL + "/raw/" + h.EscapeString(filename)
-		if token != "" {
-			embedImage += "?token=" + h.EscapeString(token)
-		}
-	} else if fileType == "audio" {
-		ogType = "music.song"
-	}
-
-	var bodyContent string
-	switch fileType {
-	case "video":
-		bodyContent = `<video controls playsinline preload="metadata" style="width:100%;max-height:80vh;background:#000;border-radius:8px;">
-            <source src="` + streamURL + `">
-            <p style="color:#999;padding:20px;">Your browser does not support this video format. <a href="` + downloadURL + `" style="color:#e07820;">Download</a></p>
-        </video>`
-	case "audio":
-		bodyContent = `<div style="padding:40px 0;">
-            <div style="font-size:48px;text-align:center;margin-bottom:24px;">&#127925;</div>
-            <audio controls preload="metadata" style="width:100%;">
-                <source src="` + streamURL + `">
-                <p style="color:#999;">Your browser does not support this audio format. <a href="` + downloadURL + `" style="color:#e07820;">Download</a></p>
-            </audio>
-        </div>`
-	case "image":
-		imageURL := "/raw/" + h.EscapeString(filename)
-		if token != "" {
-			imageURL += "?token=" + h.EscapeString(token)
-		}
-		bodyContent = `<img src="` + imageURL + `" style="max-width:100%;max-height:80vh;object-fit:contain;border-radius:4px;">`
-	default:
-		bodyContent = `<div style="padding:60px;text-align:center;color:#999;">
-            <div style="font-size:48px;margin-bottom:16px;">&#128196;</div>
-            <div style="font-size:18px;font-weight:500;color:#fff;margin-bottom:8px;">` + h.EscapeString(baseName) + `</div>
-            <div style="font-size:14px;margin-bottom:24px;">` + FormatBytes(stat.Size()) + `</div>
-            <a href="` + downloadURL + `" style="padding:12px 24px;background:#e07820;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;">Download</a>
-        </div>`
-	}
-
-	pageHTML := `<!DOCTYPE html>
+var embedPageTemplate = template.Must(template.New("embed").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>` + h.EscapeString(embedTitle) + `</title>
+    <title>{{.Title}}</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <meta property="og:title" content="` + h.EscapeString(embedTitle) + `">
-    <meta property="og:description" content="` + h.EscapeString(embedDesc) + `">
-    <meta property="og:image" content="` + h.EscapeString(embedImage) + `">
-    <meta property="og:type" content="` + ogType + `">
-    <meta property="og:url" content="` + h.EscapeString(baseURL+r.URL.Path) + `">
-    <meta property="og:site_name" content="` + h.EscapeString(Cfg.SiteName) + `">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="` + h.EscapeString(embedTitle) + `">
-    <meta name="twitter:description" content="` + h.EscapeString(embedDesc) + `">
-    <meta name="twitter:image" content="` + h.EscapeString(embedImage) + `">
+    <meta name="description" content="{{.Description}}">
+    <meta property="og:title" content="{{.Title}}">
+    <meta property="og:description" content="{{.Description}}">
+    <meta property="og:image" content="{{.OGImage}}">
+    {{if .OGImageWidth}}<meta property="og:image:width" content="{{.OGImageWidth}}">
+    <meta property="og:image:height" content="{{.OGImageHeight}}">{{end}}
+    <meta property="og:url" content="{{.CanonicalURL}}">
+    <meta property="og:type" content="{{.OGType}}">
+    <meta property="og:site_name" content="{{.SiteName}}">
+    {{if .OGVideoURL}}<meta property="og:video" content="{{.OGVideoURL}}">
+    <meta property="og:video:url" content="{{.OGVideoURL}}">
+    {{if .OGVideoSecureURL}}<meta property="og:video:secure_url" content="{{.OGVideoSecureURL}}">{{end}}
+    <meta property="og:video:type" content="{{.OGVideoType}}">
+    {{if .OGVideoWidth}}<meta property="og:video:width" content="{{.OGVideoWidth}}">
+    <meta property="og:video:height" content="{{.OGVideoHeight}}">{{end}}
+    {{end}}<meta name="twitter:card" content="{{.TwitterCard}}">
+    <meta name="twitter:title" content="{{.Title}}">
+    <meta name="twitter:description" content="{{.Description}}">
+    <meta name="twitter:image" content="{{.OGImage}}">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #fff; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
@@ -2501,14 +2580,14 @@ func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
 <body>
     <div class="embed-wrap">
         <div class="embed-header">
-            <div class="embed-title">` + h.EscapeString(baseName) + `</div>
-            <div class="embed-meta">` + FormatBytes(stat.Size()) + ` &middot; ` + h.EscapeString(fileType) + ` &middot; ` + stat.ModTime().Format("2006-01-02") + `</div>
+            <div class="embed-title">{{.BaseName}}</div>
+            <div class="embed-meta">{{.SizeText}} &middot; {{.FileType}} &middot; {{.ModDate}}</div>
         </div>
-        <div class="embed-body">` + bodyContent + `</div>
+        <div class="embed-body">{{.Body}}</div>
         <div class="embed-footer">
-            <a href="` + downloadURL + `" class="btn">Download</a>
-            <a href="/" class="btn btn-outline">` + h.EscapeString(Cfg.SiteName) + `</a>
-            <span class="powered">powered by servernotdie v` + VERSION + `</span>
+            <a href="{{.DownloadURL}}" class="btn">{{.DownloadLabel}}</a>
+            <a href="/" class="btn btn-outline">{{.SiteName}}</a>
+            <span class="powered">powered by servernotdie v{{.Version}}</span>
         </div>
     </div>
     <script>
@@ -2525,13 +2604,143 @@ func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
         });
     </script>
 </body>
-</html>`
+</html>`))
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(pageHTML))
+func embedSiteIconURL(r *http.Request, baseURL string) string {
+	if isValidHTTPURL(Cfg.IconURL) {
+		return Cfg.IconURL
+	}
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + "/favicon.ico"
 }
 
-// HandleLibFile serves static files from web/lib/ (new JS modules) and lib/ (Monaco editor).
+func HandleEmbedPreview(w http.ResponseWriter, r *http.Request) {
+	filename := strings.TrimPrefix(r.URL.Path, "/embed/")
+	baseDir, _ := resolveBaseDirFromToken(r)
+	filePath, ok := safePath(baseDir, filename)
+	if !ok {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	baseURL := baseURLForRequest(r)
+	if baseURL == "" {
+		RenderErrorPage(w, http.StatusInternalServerError, "Error", "This server cannot build absolute preview URLs.", "")
+		return
+	}
+	scheme := "http"
+	if requestIsHTTPS(r) {
+		scheme = "https"
+	}
+
+	token := r.URL.Query().Get("token")
+	q := ""
+	if token != "" {
+		q = "?token=" + token
+	}
+	quoted := h.EscapeString(filename)
+	baseName := filepath.Base(filename)
+	fileType := GetFileType(filename)
+
+	streamURL := baseURL + "/stream/" + quoted + q
+	downloadURL := baseURL + "/download/" + quoted + q
+
+	tr := func(key, fallback string) string {
+		if v, ok := activeLangStrings(r)[key]; ok && v != "" {
+			return v
+		}
+		return fallback
+	}
+	downloadLabel := tr("embed_download", "Download")
+
+	embedTitle := Cfg.EmbedTitle
+	if embedTitle == "" {
+		embedTitle = baseName + " — " + Cfg.SiteName
+	}
+	embedDesc := Cfg.EmbedDescription
+	if embedDesc == "" {
+		embedDesc = "File sharing powered by " + Cfg.SiteName
+	}
+	ogImage := embedSiteIconURL(r, baseURL)
+
+	data := embedPageData{
+		Title:         embedTitle,
+		Description:   embedDesc,
+		SiteName:      Cfg.SiteName,
+		CanonicalURL:  baseURL + r.URL.Path,
+		OGType:        "website",
+		TwitterCard:   "summary",
+		StreamURL:     streamURL,
+		DownloadURL:   downloadURL,
+		BaseName:      baseName,
+		FileType:      fileType,
+		SizeText:      FormatBytes(stat.Size()),
+		ModDate:       stat.ModTime().Format("2006-01-02"),
+		DownloadLabel: downloadLabel,
+		Version:       VERSION,
+	}
+
+	switch fileType {
+	case "video":
+		ogImage = embedSiteIconURL(r, baseURL)
+		data.OGType = "video.other"
+		data.TwitterCard = "player"
+		data.OGVideoURL = streamURL
+		if scheme == "https" {
+			data.OGVideoSecureURL = streamURL
+		}
+		data.OGVideoType = getMediaContentType(filename)
+		if data.OGVideoType == "" || data.OGVideoType == "application/octet-stream" {
+			data.OGVideoType = "video/mp4"
+		}
+		videoURL := "/stream/" + quoted + q
+		data.Body = template.HTML(`<video controls playsinline preload="metadata" style="width:100%;max-height:80vh;background:#000;border-radius:8px;">
+            <source src="` + videoURL + `">
+            <p style="color:#999;padding:20px;">` + h.EscapeString(tr("embed_video_unsupported", "Your browser does not support this video format.")) + ` <a href="` + h.EscapeString(downloadURL) + `" style="color:#e07820;">` + h.EscapeString(downloadLabel) + `</a></p>
+        </video>`)
+	case "audio":
+		data.OGType = "music.song"
+		data.TwitterCard = "summary"
+		ogImage = embedSiteIconURL(r, baseURL)
+		audioURL := "/stream/" + quoted + q
+		data.Body = template.HTML(`<div style="padding:40px 0;">
+            <div style="font-size:48px;text-align:center;margin-bottom:24px;">&#127925;</div>
+            <audio controls preload="metadata" style="width:100%;">
+                <source src="` + audioURL + `">
+                <p style="color:#999;">` + h.EscapeString(tr("embed_audio_unsupported", "Your browser does not support this audio format.")) + ` <a href="` + h.EscapeString(downloadURL) + `" style="color:#e07820;">` + h.EscapeString(downloadLabel) + `</a></p>
+            </audio>
+        </div>`)
+	case "image":
+		data.OGType = "image.other"
+		data.TwitterCard = "summary_large_image"
+		ogImage = baseURL + "/raw/" + quoted + q
+		imageURL := "/raw/" + quoted + q
+		data.Body = template.HTML(`<img src="` + imageURL + `" style="max-width:100%;max-height:80vh;object-fit:contain;border-radius:4px;">`)
+	default:
+		data.Body = template.HTML(`<div style="padding:60px;text-align:center;color:#999;">
+            <div style="font-size:48px;margin-bottom:16px;">&#128196;</div>
+            <div style="font-size:18px;font-weight:500;color:#fff;margin-bottom:8px;">` + h.EscapeString(baseName) + `</div>
+            <div style="font-size:14px;margin-bottom:24px;">` + h.EscapeString(FormatBytes(stat.Size())) + `</div>
+            <a href="` + h.EscapeString(downloadURL) + `" style="padding:12px 24px;background:#e07820;color:#fff;text-decoration:none;border-radius:6px;font-weight:500;">` + h.EscapeString(downloadLabel) + `</a>
+        </div>`)
+	}
+	data.OGImage = ogImage
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	w.WriteHeader(http.StatusOK)
+	embedPageTemplate.Execute(w, data)
+}
+
 func HandleLibFile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/lib/")
 	if name == "" || strings.Contains(name, "..") {
@@ -2570,7 +2779,6 @@ func HandleLibFile(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Try web/lib/ first (refactored JS modules), then lib/ (Monaco/legacy)
 	if tryServe(filepath.Join(WorkDir, "web", "lib", name)) {
 		return
 	}
@@ -2581,8 +2789,6 @@ func HandleLibFile(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Not found", http.StatusNotFound)
 }
 
-// HandleAPIView streams or renders image/video directly for the new /api/view/{file_id} endpoint.
-// file_id is the URL-encoded relative file path (same as used in /raw/).
 func HandleAPIView(w http.ResponseWriter, r *http.Request) {
 	fileID := strings.TrimPrefix(r.URL.Path, "/api/view/")
 	baseDir, _ := resolveBaseDirFromToken(r)
@@ -2601,6 +2807,9 @@ func HandleAPIView(w http.ResponseWriter, r *http.Request) {
 
 	fileType := GetFileType(fileID)
 	ext := strings.ToLower(filepath.Ext(fileID))
+	extendMediaDeadlines(w)
+	setFileETag(w, stat)
+	setTrafficMeta(r, "download", fileID)
 
 	switch fileType {
 	case "image":
@@ -2618,7 +2827,6 @@ func HandleAPIView(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	case "video", "audio":
 		ct := getMediaContentType(fileID)
-		// HLS support
 		if ext == ".m3u8" {
 			ct = "application/vnd.apple.mpegurl"
 		} else if ext == ".ts" {
@@ -2634,8 +2842,6 @@ func HandleAPIView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleThumbnail serves a small inline version of an image for thumbnail display.
-// For video files it returns a placeholder. For images it returns the image at reduced size hint.
 func HandleThumbnail(w http.ResponseWriter, r *http.Request) {
 	fileID := strings.TrimPrefix(r.URL.Path, "/thumbnail/")
 	baseDir, _ := resolveBaseDirFromToken(r)
@@ -2644,9 +2850,10 @@ func HandleThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	extendMediaDeadlines(w)
+	setTrafficMeta(r, "download", fileID)
 	fileType := GetFileType(fileID)
 	if fileType != "image" {
-		// Return a simple SVG placeholder for non-images
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#1a1a1a"/><polygon points="45,25 45,55 75,40" fill="#666"/></svg>`))
@@ -2659,6 +2866,7 @@ func HandleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	stat, _ := f.Stat()
+	setFileETag(w, stat)
 	ext := strings.ToLower(filepath.Ext(fileID))
 	ct := map[string]string{
 		".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
@@ -2673,12 +2881,6 @@ func HandleThumbnail(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 }
 
-// ─── Download by URL (server-side fetch) ─────────────────────────────────────
-
-// HandleDownloadByURL fetches a remote URL server-side and saves it into the
-// current directory (admin → PublicDir, user → their storage dir).
-// validateDownloadURL blocks SSRF by rejecting non-HTTP(S) schemes and
-// private / loopback / link-local addresses resolved from the host.
 func validateDownloadURL(raw string) error {
 	u, err := url.ParseRequestURI(raw)
 	if err != nil {
@@ -2692,7 +2894,6 @@ func validateDownloadURL(raw string) error {
 	if hostname == "" {
 		return fmt.Errorf("missing host")
 	}
-	// Resolve and check every IP the host maps to
 	addrs, err := net.LookupHost(hostname)
 	if err != nil {
 		return fmt.Errorf("cannot resolve host: %v", err)
@@ -2706,7 +2907,6 @@ func validateDownloadURL(raw string) error {
 			ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
 			return fmt.Errorf("requests to private or internal addresses are not allowed")
 		}
-		// Block 169.254.0.0/16 (AWS/GCP metadata) explicitly
 		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 {
 			return fmt.Errorf("requests to link-local addresses are not allowed")
 		}
@@ -2714,14 +2914,6 @@ func validateDownloadURL(raw string) error {
 	return nil
 }
 
-// makeSSRFSafeClient resolves the host ONCE, validates the IP, then returns an
-// http.Client whose dialer is pinned to that IP — preventing DNS rebinding attacks
-// where the first lookup returns a public IP (passes validation) but subsequent
-// lookups return 127.0.0.1 or another internal address.
-//
-// HIGH-3 FIX: validateDownloadURL + a second http.Get both call net.LookupHost
-// independently, giving a race window for DNS rebinding. This function closes
-// that window by pinning the connection to the pre-validated IP.
 func makeSSRFSafeClient(rawURL string) (*http.Client, error) {
 	u, err := url.ParseRequestURI(rawURL)
 	if err != nil {
@@ -2737,7 +2929,6 @@ func makeSSRFSafeClient(rawURL string) (*http.Client, error) {
 		}
 	}
 
-	// Resolve once; validateDownloadURL already checked all addrs are public.
 	addrs, err := net.LookupHost(host)
 	if err != nil || len(addrs) == 0 {
 		return nil, fmt.Errorf("cannot resolve host")
@@ -2747,24 +2938,21 @@ func makeSSRFSafeClient(rawURL string) (*http.Client, error) {
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			// Always connect to the pre-validated IP, ignoring whatever DNS would return now.
 			return (&net.Dialer{}).DialContext(ctx, network, pinnedAddr)
 		},
 	}
 	return &http.Client{
 		Transport: transport,
-		Timeout:   30 * 60 * 1_000_000_000, // 30 min
+		Timeout:   30 * 60 * 1_000_000_000,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects")
 			}
-			// Re-validate each redirect target (different host → new DNS check + pin)
 			return validateDownloadURL(req.URL.String())
 		},
 	}, nil
 }
 
-// POST /download-url   body JSON: {"url":"https://...","path":"optional/subdir"}
 func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -2772,14 +2960,13 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		URL  string `json:"url"`
-		Path string `json:"path"` // optional subdirectory inside base
+		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
 		http.Error(w, `{"error":"url required"}`, http.StatusBadRequest)
 		return
 	}
 
-	// SSRF protection: validate scheme and block private/internal IPs
 	if err := validateDownloadURL(req.URL); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
@@ -2788,7 +2975,6 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 
 	baseDir, _ := resolveBaseDir(r)
 
-	// Build save directory
 	saveDir := baseDir
 	if req.Path != "" {
 		rel := filepath.Clean(req.Path)
@@ -2803,7 +2989,6 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive filename from URL
 	urlPath := req.URL
 	if idx := strings.Index(urlPath, "?"); idx != -1 {
 		urlPath = urlPath[:idx]
@@ -2812,12 +2997,10 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 	if filename == "" || filename == "." || filename == "/" {
 		filename = "download"
 	}
-	// Sanitize
 	filename = filepath.Base(filepath.Clean(filename))
 
 	destPath := filepath.Join(saveDir, filename)
 
-	// HIGH-3 FIX: Use SSRF-safe client that pins DNS resolution to prevent rebinding.
 	client, err := makeSSRFSafeClient(req.URL)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -2843,7 +3026,6 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"cannot create file"}`, http.StatusInternalServerError)
 		return
 	}
-	// Limit download size to 512 MB
 	const maxDownloadBytes = 512 * 1024 * 1024
 	written, err := io.Copy(out, io.LimitReader(resp.Body, maxDownloadBytes))
 	out.Close()
@@ -2861,33 +3043,29 @@ func HandleDownloadByURL(w http.ResponseWriter, r *http.Request) {
 		"size":     written,
 	})
 }
-// ─── Stream Info (yt-dlp metadata) ───────────────────────────────────────────
 
-// StreamFormat holds one downloadable format from yt-dlp.
 type StreamFormat struct {
-	FormatID  string  `json:"format_id"`
-	Ext       string  `json:"ext"`
-	Height    int     `json:"height,omitempty"`
-	Width     int     `json:"width,omitempty"`
-	Filesize  int64   `json:"filesize,omitempty"`
-	VCodec    string  `json:"vcodec,omitempty"`
-	ACodec    string  `json:"acodec,omitempty"`
-	Quality   float64 `json:"quality,omitempty"`
-	FormatNote string `json:"format_note,omitempty"`
-	TBR       float64 `json:"tbr,omitempty"`
+	FormatID   string  `json:"format_id"`
+	Ext        string  `json:"ext"`
+	Height     int     `json:"height,omitempty"`
+	Width      int     `json:"width,omitempty"`
+	Filesize   int64   `json:"filesize,omitempty"`
+	VCodec     string  `json:"vcodec,omitempty"`
+	ACodec     string  `json:"acodec,omitempty"`
+	Quality    float64 `json:"quality,omitempty"`
+	FormatNote string  `json:"format_note,omitempty"`
+	TBR        float64 `json:"tbr,omitempty"`
 }
 
-// StreamInfo is the condensed metadata returned to the browser.
 type StreamInfo struct {
-	Title      string         `json:"title"`
-	Thumbnail  string         `json:"thumbnail"`
-	Duration   int            `json:"duration"`
-	Uploader   string         `json:"uploader"`
-	Formats    []StreamFormat `json:"formats"`
-	Available  bool           `json:"available"`
+	Title     string         `json:"title"`
+	Thumbnail string         `json:"thumbnail"`
+	Duration  int            `json:"duration"`
+	Uploader  string         `json:"uploader"`
+	Formats   []StreamFormat `json:"formats"`
+	Available bool           `json:"available"`
 }
 
-// isStreamingURL checks if the URL belongs to a known streaming platform.
 func IsStreamingURL(rawURL string) bool {
 	hosts := []string{
 		"youtube.com", "youtu.be",
@@ -2912,7 +3090,6 @@ func IsStreamingURL(rawURL string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	// strip www.
 	host = strings.TrimPrefix(host, "www.")
 	for _, h := range hosts {
 		if host == h || strings.HasSuffix(host, "."+h) {
@@ -2922,8 +3099,6 @@ func IsStreamingURL(rawURL string) bool {
 	return false
 }
 
-// GET /stream-info?url=...
-// Returns StreamInfo JSON (uses yt-dlp --dump-json).
 func HandleStreamInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	rawURL := r.URL.Query().Get("url")
@@ -2951,26 +3126,56 @@ func HandleStreamInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info := StreamInfo{Available: true}
-	if v, ok := raw["title"].(string); ok { info.Title = v }
-	if v, ok := raw["thumbnail"].(string); ok { info.Thumbnail = v }
-	if v, ok := raw["uploader"].(string); ok { info.Uploader = v }
-	if v, ok := raw["duration"].(float64); ok { info.Duration = int(v) }
+	if v, ok := raw["title"].(string); ok {
+		info.Title = v
+	}
+	if v, ok := raw["thumbnail"].(string); ok {
+		info.Thumbnail = v
+	}
+	if v, ok := raw["uploader"].(string); ok {
+		info.Uploader = v
+	}
+	if v, ok := raw["duration"].(float64); ok {
+		info.Duration = int(v)
+	}
 
 	if fmts, ok := raw["formats"].([]interface{}); ok {
 		for _, fi := range fmts {
 			fm, ok := fi.(map[string]interface{})
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			sf := StreamFormat{}
-			if v, ok := fm["format_id"].(string); ok { sf.FormatID = v }
-			if v, ok := fm["ext"].(string); ok { sf.Ext = v }
-			if v, ok := fm["height"].(float64); ok { sf.Height = int(v) }
-			if v, ok := fm["width"].(float64); ok { sf.Width = int(v) }
-			if v, ok := fm["filesize"].(float64); ok { sf.Filesize = int64(v) }
-			if v, ok := fm["vcodec"].(string); ok { sf.VCodec = v }
-			if v, ok := fm["acodec"].(string); ok { sf.ACodec = v }
-			if v, ok := fm["quality"].(float64); ok { sf.Quality = v }
-			if v, ok := fm["format_note"].(string); ok { sf.FormatNote = v }
-			if v, ok := fm["tbr"].(float64); ok { sf.TBR = v }
+			if v, ok := fm["format_id"].(string); ok {
+				sf.FormatID = v
+			}
+			if v, ok := fm["ext"].(string); ok {
+				sf.Ext = v
+			}
+			if v, ok := fm["height"].(float64); ok {
+				sf.Height = int(v)
+			}
+			if v, ok := fm["width"].(float64); ok {
+				sf.Width = int(v)
+			}
+			if v, ok := fm["filesize"].(float64); ok {
+				sf.Filesize = int64(v)
+			}
+			if v, ok := fm["vcodec"].(string); ok {
+				sf.VCodec = v
+			}
+			if v, ok := fm["acodec"].(string); ok {
+				sf.ACodec = v
+			}
+			if v, ok := fm["quality"].(float64); ok {
+				sf.Quality = v
+			}
+			if v, ok := fm["format_note"].(string); ok {
+				sf.FormatNote = v
+			}
+			if v, ok := fm["tbr"].(float64); ok {
+				sf.TBR = v
+			}
 			info.Formats = append(info.Formats, sf)
 		}
 	}
@@ -2978,8 +3183,6 @@ func HandleStreamInfo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-// POST /stream-download  body: {url, format_id, path}
-// Runs yt-dlp to download with specific format into the user's directory.
 func HandleStreamDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -3014,15 +3217,15 @@ func HandleStreamDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args := []string{
-    "--no-playlist",
-    "--merge-output-format", "mp4",
-    "-o", filepath.Join(saveDir, "%(title)s.%(ext)s"),
-}
-if req.FormatID != "" {
-    args = append(args, "-f", req.FormatID+"+bestaudio/"+req.FormatID)
-    } else {
-    args = append(args, "-f", "bestvideo+bestaudio/best")
-    }
+		"--no-playlist",
+		"--merge-output-format", "mp4",
+		"-o", filepath.Join(saveDir, "%(title)s.%(ext)s"),
+	}
+	if req.FormatID != "" {
+		args = append(args, "-f", req.FormatID+"+bestaudio/"+req.FormatID)
+	} else {
+		args = append(args, "-f", "bestvideo+bestaudio/best")
+	}
 	args = append(args, req.URL)
 
 	ctx := r.Context()
@@ -3030,7 +3233,9 @@ if req.FormatID != "" {
 	outBytes, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(outBytes))
-		if msg == "" { msg = err.Error() }
+		if msg == "" {
+			msg = err.Error()
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": msg})
 		return
 	}

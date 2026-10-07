@@ -55,16 +55,14 @@ func StartSFTPServer() {
 
 	sshConfig := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			// Admin check (plain-text password from config)
 			if c.User() == Cfg.Username && string(pass) == Cfg.Password {
 				return &ssh.Permissions{
 					Extensions: map[string]string{
 						"user":      c.User(),
-						"user_uuid": "", // empty = admin
+						"user_uuid": "",
 					},
 				}, nil
 			}
-			// Sub-user check (bcrypt hash from user DB)
 			u := GetUserByUsername(c.User())
 			if u != nil && u.IsActive && CheckPassword(u.PasswordHash, string(pass)) {
 				return &ssh.Permissions{
@@ -317,9 +315,9 @@ type syntheticFileInfo struct {
 	name string
 }
 
-func (s *syntheticFileInfo) Name() string      { return s.name }
-func (s *syntheticFileInfo) Size() int64       { return 0 }
-func (s *syntheticFileInfo) Mode() os.FileMode { return 0444 }
+func (s *syntheticFileInfo) Name() string       { return s.name }
+func (s *syntheticFileInfo) Size() int64        { return 0 }
+func (s *syntheticFileInfo) Mode() os.FileMode  { return 0444 }
 func (s *syntheticFileInfo) ModTime() time.Time { return time.Time{} }
-func (s *syntheticFileInfo) IsDir() bool       { return false }
-func (s *syntheticFileInfo) Sys() interface{}  { return nil }
+func (s *syntheticFileInfo) IsDir() bool        { return false }
+func (s *syntheticFileInfo) Sys() interface{}   { return nil }

@@ -1,11 +1,10 @@
-// qr.js — QR modal + server-side rendering via /api/qr (Go backend)
-// Included on both admin dashboard and user dashboard when QR is enabled.
+
+
 
 'use strict';
 
-/* ── QR Modal ─────────────────────────────────────────────────────────────── */
 (function() {
-    // Inject modal HTML once DOM is ready
+    
     function injectModal() {
         if (document.getElementById('snd-qr-modal')) return;
         var modal = document.createElement('div');
@@ -53,10 +52,10 @@
 })();
 
 function generateQR(filename) {
-    // Resolve the direct file URL for this file (public token URL or authed URL).
-    // SECURITY: never append ?token= (API token) to QR URLs for unauthenticated visitors.
-    // The QR image may be shared publicly — leaking the admin API token would allow
-    // anyone who scans it to bypass all file permission checks.
+    
+    
+    
+    
     var url;
     var guestMode = (typeof isAuthenticated !== 'undefined' && !isAuthenticated);
 
@@ -67,17 +66,17 @@ function generateQR(filename) {
             return fp === filename || x.name === filename;
         });
         if (f && f.is_public) {
-            // Public file: build a clean public URL.
-            // Use pt= token if available; otherwise the bare /raw/ URL is enough
-            // since public files are accessible without any token.
+            
+            
+            
             var base = window.location.origin + '/raw/' + encodeURIComponent(filename);
             if (f.public_token) {
                 url = base + '?pt=' + encodeURIComponent(f.public_token);
             } else {
-                url = base; // public without pt= — still works
+                url = base; 
             }
         } else if (!guestMode) {
-            // Authenticated user — safe to use authed URL
+            
             if (typeof makePrivateURL === 'function') {
                 url = makePrivateURL(filename);
             } else if (typeof addTokenToURL === 'function') {
@@ -86,12 +85,12 @@ function generateQR(filename) {
                 url = window.location.origin + '/raw/' + encodeURIComponent(filename);
             }
         } else {
-            // Guest + private file — should not happen since /files filters these out,
-            // but guard anyway: show plain URL (server will block it).
+            
+            
             url = window.location.origin + '/raw/' + encodeURIComponent(filename);
         }
     } else if (!guestMode && typeof addTokenToURL === 'function') {
-        // Fallback for user-dash where allFiles may be named differently
+        
         url = addTokenToURL(window.location.origin + '/raw/' + encodeURIComponent(filename));
     } else {
         url = window.location.origin + '/raw/' + encodeURIComponent(filename);
@@ -112,12 +111,12 @@ function closeQRModal() {
     if (modal) modal.style.display = 'none';
 }
 
-// Server-side QR: ask Go to generate the PNG, draw result onto canvas.
+
 function _renderQRServerSide(canvas, text) {
     var size = 280;
     var apiURL = '/api/qr?url=' + encodeURIComponent(text) + '&size=' + size;
 
-    // Show a loading spinner while the server generates the QR
+    
     var ctx = canvas.getContext('2d');
     canvas.width  = size;
     canvas.height = size;
@@ -133,7 +132,7 @@ function _renderQRServerSide(canvas, text) {
         canvas.width  = img.naturalWidth  || size;
         canvas.height = img.naturalHeight || size;
         ctx.drawImage(img, 0, 0);
-        // Overlay logo if set
+        
         var logoURL = window._qrLogoURL || '';
         if (logoURL) {
             var logo = new Image();
@@ -148,12 +147,12 @@ function _renderQRServerSide(canvas, text) {
                 ctx.fillRect(lx - 4, ly - 4, lw + 8, lh + 8);
                 ctx.drawImage(logo, lx, ly, lw, lh);
             };
-            logo.onerror = function() { /* logo failed — QR still visible */ };
+            logo.onerror = function() {  };
             logo.src = logoURL;
         }
     };
     img.onerror = function() {
-        // Server QR failed — show error message on canvas
+        
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, size, size);
         ctx.fillStyle = '#c62828';

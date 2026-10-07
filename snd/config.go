@@ -10,9 +10,6 @@ import (
 )
 
 func LoadConfig() Config {
-	// M3 FIX: Generate a random password for the first run.
-	// This prevents brute-force attacks against the default admin/admin credential.
-	// The generated password is printed to the terminal at startup.
 	initialPassword := generateInitialPassword()
 
 	cfg := Config{
@@ -55,7 +52,6 @@ func LoadConfig() Config {
 		fmt.Printf("==========================================================\n")
 	}
 
-	// Auto-generate NodePrivateKey if missing (required for --cf node auth)
 	changed := false
 	if cfg.NodePrivateKey == "" {
 		cfg.NodePrivateKey = GenerateRandomToken(32)
@@ -74,8 +70,6 @@ func LoadConfig() Config {
 	return cfg
 }
 
-// GenerateRandomToken produces a cryptographically secure hex token.
-// byteLen specifies how many random bytes; returned string is byteLen*2 hex chars.
 func GenerateRandomToken(byteLen int) string {
 	b := make([]byte, byteLen)
 	if _, err := rand.Read(b); err != nil {
@@ -104,9 +98,10 @@ func Init() {
 	LoadTrafficStats()
 	LoadSiteSettings()
 	LoadIconConfig()
+	ensureChallengeSecret()
+	startUploadTmpJanitor()
 }
 
-// SaveConfig writes the current Cfg back to ConfigFile.
 func SaveConfig() {
 	data, err := yaml.Marshal(&Cfg)
 	if err != nil {
@@ -115,8 +110,6 @@ func SaveConfig() {
 	os.WriteFile(ConfigFile, data, 0600)
 }
 
-// generateInitialPassword creates a random 16-character alphanumeric password
-// used on first boot instead of the insecure "admin" default.
 func generateInitialPassword() string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 16)
